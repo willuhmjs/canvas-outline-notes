@@ -43,15 +43,15 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64
-          # Disable provenance and SBOM attestations to avoid wrapping the image
-          # in an OCI image index — the cluster's registry:2 pull-through cache
-          # sends incorrect Accept headers during re-validation of OCI indexes,
-          # causing containerd to fail to pull even previously-cached images.
           provenance: false
           sbom: false
+          # Push as Docker V2 manifest (not OCI) so the cluster's registry:2
+          # pull-through cache can re-validate it — registry:2 only sends
+          # Docker V2 Accept headers, and GHCR returns 404 for OCI manifests
+          # when only the Docker V2 Accept header is present.
+          outputs: type=image,push=true,oci-mediatypes=false
           cache-from: type=gha
           cache-to: type=gha,mode=max
