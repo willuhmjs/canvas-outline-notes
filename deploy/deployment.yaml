@@ -1,0 +1,105 @@
+# Long-running deployment that runs both canvas-sync and canvas-outline-notes on schedules.
+# Replaces the two separate CronJobs for simpler operation.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canvas-notes
+  namespace: dav
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: canvas-notes
+  template:
+    metadata:
+      labels:
+        app: canvas-notes
+    spec:
+      restartPolicy: Always
+      containers:
+        - name: canvas-notes
+          image: ghcr.io/willuhmjs/canvas-outline-notes:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            # Scheduler intervals (in minutes)
+            - name: SYNC_INTERVAL_MINUTES
+              value: "15"
+            - name: NOTES_INTERVAL_MINUTES
+              value: "60"
+            # canvas-sync configuration
+            - name: DAV_BASE_URL
+              value: "http://your-caldav-server:5232"
+            - name: DAV_CALENDAR_DISPLAYNAME
+              value: "Academics"
+            - name: CANVAS_ICS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: canvas-secrets
+                  key: CANVAS_ICS_URL
+            - name: DAV_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: canvas-secrets
+                  key: DAV_USERNAME
+            - name: DAV_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: canvas-secrets
+                  key: DAV_PASSWORD
+            - name: CANVAS_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: canvas-secrets
+                  key: CANVAS_API_TOKEN
+                  optional: true
+            - name: CANVAS_API_TOKEN_ISSUED_AT
+              valueFrom:
+                secretKeyRef:
+                  name: canvas-secrets
+                  key: CANVAS_API_TOKEN_ISSUED_AT
+                  optional: true
+            # canvas-outline-notes configuration
+            - name: CANVAS_BASE_URL
+              value: "https://canvas.example.edu"
+            - name: CHAT_API_BASE_URL
+              value: "https://your-llm-api/v1"
+            - name: CHAT_MODEL_TEXT
+              value: "gpt-3.5-turbo"
+            - name: CHAT_MODEL_VISION
+              value: "gpt-4-vision-preview"
+            - name: OUTLINE_BASE_URL
+              value: "https://your-outline-instance"
+            - name: OUTLINE_COLLECTION_NAME
+              value: "Automatic Notes"
+            - name: CHAT_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: canvas-secrets
+                  key: CHAT_API_KEY
+            - name: OUTLINE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: canvas-secrets
+                  key: OUTLINE_API_TOKEN
+            - name: STATE_FILE
+              value: "/state/canvas-notes-state.json"
+          resources:
+            limits:
+              memory: 512Mi
+            requests:
+              memory: 128Mi
+              cpu: 100m
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+            - name: state
+              mountPath: /state
+      volumes:
+        - name: scripts
+          configMap:
+            name: canvas-scripts
+        - name: state
+          emptyDir: {}

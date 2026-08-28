@@ -16,7 +16,10 @@ RUN pip install --no-cache-dir \
 RUN python3 -c "import site; print(site.getsitepackages()[0])" | \
     xargs -I{} sh -c 'echo "import ssl; ssl._create_default_https_context = ssl._create_unverified_context" > {}/sitecustomize.py'
 
+COPY scheduler.py /scheduler.py
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT ["/entrypoint.sh"]
+# Default to scheduler mode, but allow override for one-off jobs
+CMD ["python3", "/scheduler.py"]
+ENTRYPOINT []

@@ -31,6 +31,7 @@ data:
     next time a run completes without any auth failure.
     """
     import base64
+    import hashlib
     import html
     import io
     import json
@@ -42,7 +43,7 @@ data:
     import urllib.error
     import urllib.request
     import xml.etree.ElementTree as ET
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone, timedelta
     from urllib.parse import urlencode, urljoin
 
     import docx  # python-docx
@@ -93,6 +94,9 @@ data:
     DAV_PASSWORD = os.environ.get("DAV_PASSWORD", "")
     DAV_CALENDAR_DISPLAYNAME = os.environ.get("DAV_CALENDAR_DISPLAYNAME", "Academics")
     ALARM_OBJECT_UID = "canvas-outline-notes-credential-alarm"
+
+    # File-based state for incremental sync
+    STATE_FILE = os.environ.get("STATE_FILE", "/state/canvas-notes-state.json")
 
     MAX_FILE_BYTES = 20 * 1024 * 1024
     MAX_PDF_PAGES_AS_IMAGES = 5
@@ -470,10 +474,16 @@ data:
         return resp["choices"][0]["message"]["content"]
 
 
-    def generate_notes(course_name, assignment):
+    def generate_notes(course_name, assignment, existing_id=None):
         description_html = assignment.get("description") or ""
         description_text = html_to_text(description_html)
         file_ids = extract_file_ids(description_html)[:MAX_ATTACHMENTS_PER_ASSIGNMENT]
+
+        # Compute content hash for change detection
+        rubric = assignment.get("rubric") or []
+        submission_types = assignment.get("submission_types") or []
+        content_to_hash = description_html + json.dumps(rubric) + ",".join(submission_types)
+        content_hash = hashlib.sha256(content_to_hash.encode()).hexdigest()[:16]
 
         extracted_texts, image_data_urls = [], []
         for file_id in file_ids:
@@ -529,9 +539,16 @@ data:
             f"**Course:** {course_name}\n\n"
             f"**Due:** {assignment.get('due_at') or 'no due date'}\n\n"
             f"**Points:** {assignment.get('points_possible', 'n/a')}\n\n"
+            f"**Hash:** {content_hash}\n\n"
             f"**Canvas link:** [{assignment.get('name')}]({assignment.get('html_url')})\n\n---\n\n"
         )
-        return header + ai_text
+        doc_text = header + ai_text
+
+        # If updating an existing document, use documents.update instead of returning text
+        if existing_id:
+            outline_post("documents.update", {"id": existing_id, "text": doc_text, "publish": True})
+            return None
+        return doc_text
 
 
     def generate_presentation_notes(course_name, file_name, file_bytes, content_type):
@@ -654,6 +671,33 @@ data:
         return header + ai_text
 
 
+    def build_completion_map(courses):
+        """{assignment_id: is_done} from Canvas's own submission/grade data.
+        "Done" = submitted, graded, or excused. Reuses courses list to avoid re-fetching."""
+        completion = {}
+        for course in courses:
+            course_id = course.get("id")
+            if course_id is None:
+                continue
+            try:
+                assignments = canvas_get_all(
+                    f"/api/v1/courses/{course_id}/assignments",
+                    {"include[]": "submission", "per_page": 100},
+                )
+                for a in assignments:
+                    submission = a.get("submission") or {}
+                    done = bool(
+                        submission.get("submitted_at")
+                        or submission.get("excused")
+                        or submission.get("grade") is not None
+                    )
+                    completion[str(a.get("id"))] = done
+            except Exception:
+                # Best effort - continue with other courses if one fails
+                continue
+        return completion
+
+
     def outline_post(action, body, max_retries=4):
         """Confirmed live: Outline's self-hosted rate limit is real and gets hit within
         a single run once you're doing collections.list + documents.list per course +
@@ -678,6 +722,29 @@ data:
         if status >= 400:
             raise RuntimeError(f"Outline {action} failed: {status} {resp}")
         return resp["data"]
+
+
+    def read_state():
+        """Read state from JSON file. Returns dict or {} if not found."""
+        try:
+            with open(STATE_FILE, 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return {}
+
+
+    def write_state(state):
+        """Write state to JSON file."""
+        # Ensure directory exists
+        state_dir = os.path.dirname(STATE_FILE)
+        if state_dir:
+            os.makedirs(state_dir, exist_ok=True)
+
+        # Write atomically via temp file
+        temp_file = STATE_FILE + '.tmp'
+        with open(temp_file, 'w') as f:
+            json.dump(state, f, indent=2)
+        os.replace(temp_file, STATE_FILE)
 
 
     def find_or_create_collection(name):
@@ -869,12 +936,16 @@ data:
 
 
     def main():
-        stats = {"created": 0, "moved": 0, "skipped": 0, "errors": 0, "capped": 0, "locked": 0}
+        stats = {"created": 0, "moved": 0, "skipped": 0, "errors": 0, "capped": 0, "locked": 0, "regenerated": 0, "marked_submitted": 0}
+        state = read_state()
         try:
             collection_id = find_or_create_collection(OUTLINE_COLLECTION_NAME)
             all_docs = list_all_documents(collection_id)
 
             courses = current_term_courses(canvas_get_all("/api/v1/courses", {"enrollment_state": "active", "per_page": 100}))
+
+            # Build completion map once for all courses
+            completion_map = build_completion_map(courses)
 
             # Gather each course's pending items (assignments + lecture files) first,
             # then interleave round-robin across courses so no single course monopolizes
@@ -914,7 +985,12 @@ data:
 
                 # Assignments -> bucketed sub-folders, with re-categorisation on each run
                 try:
-                    assignments = canvas_get_all(f"/api/v1/courses/{course_id}/assignments", {"per_page": 100})
+                    # Use incremental sync if we have a last run timestamp
+                    params = {"per_page": 100}
+                    last_assignments_run = state.get("last_assignments_run")
+                    if last_assignments_run:
+                        params["updated_since"] = last_assignments_run
+                    assignments = canvas_get_all(f"/api/v1/courses/{course_id}/assignments", params)
                 except AuthFailure:
                     raise
                 except Exception as exc:
@@ -940,7 +1016,45 @@ data:
                             # Wrong bucket (or pre-migration flat location) -- move it
                             course_items.append(("move", course_name, target_folder_id, name, existing_id))
                         else:
-                            stats["skipped"] += 1
+                            # Check if content has changed by comparing hashes
+                            try:
+                                doc_info = outline_post("documents.info", {"id": existing_id})
+                                existing_text = doc_info.get("text", "")
+                                hash_match = re.search(r'\*\*Hash:\*\*\s*([a-f0-9]+)', existing_text)
+                                if hash_match:
+                                    existing_hash = hash_match.group(1)
+                                    # Compute current hash
+                                    rubric = assignment.get("rubric") or []
+                                    submission_types = assignment.get("submission_types") or []
+                                    description_html = assignment.get("description") or ""
+                                    content_to_hash = description_html + json.dumps(rubric) + ",".join(submission_types)
+                                    current_hash = hashlib.sha256(content_to_hash.encode()).hexdigest()[:16]
+                                    if existing_hash != current_hash:
+                                        # Content changed, regenerate
+                                        course_items.append(("regen", course_name, target_folder_id, name, assignment, existing_id))
+                                    else:
+                                        # Check if should mark as submitted
+                                        assignment_id = str(assignment.get("id", ""))
+                                        due_at = assignment.get("due_at")
+                                        if (due_at and completion_map.get(assignment_id) and
+                                            "✓ Submitted" not in existing_text):
+                                            # Check if due date is within ±30 days
+                                            try:
+                                                due = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
+                                                days_diff = abs((due.date() - datetime.now(timezone.utc).date()).days)
+                                                if days_diff <= 30:
+                                                    course_items.append(("mark_submitted", course_name, target_folder_id, name, existing_id))
+                                                else:
+                                                    stats["skipped"] += 1
+                                            except Exception:
+                                                stats["skipped"] += 1
+                                        else:
+                                            stats["skipped"] += 1
+                                else:
+                                    stats["skipped"] += 1
+                            except Exception as exc:
+                                print(f"WARNING: could not check hash for '{name}': {exc}", file=sys.stderr)
+                                stats["skipped"] += 1
                         continue
 
                     # Locked assignments (confirmed live: locked_for_user=True) show no real
@@ -960,22 +1074,44 @@ data:
                 # lacks the files scope or course has restricted file visibility), but
                 # individual File items inside modules ARE accessible via content_id.
                 # Scan every module's items and collect File entries.
-                raw_file_ids, seen_file_ids = [], set()
-                try:
-                    modules = canvas_get_all(f"/api/v1/courses/{course_id}/modules", {"per_page": 100})
-                except AuthFailure:
-                    raise
-                except Exception as exc:
-                    print(f"ERROR listing modules for course {course_id}: {exc}", file=sys.stderr)
-                    stats["errors"] += 1
-                    modules = []
+                # Only scan modules if more than 6 hours have passed since last run
+                last_modules_run = state.get("last_modules_run")
+                should_scan_modules = True
+                if last_modules_run:
+                    try:
+                        last_run = datetime.fromisoformat(last_modules_run)
+                        hours_since = (datetime.now(timezone.utc) - last_run).total_seconds() / 3600
+                        should_scan_modules = hours_since >= 6
+                    except Exception:
+                        should_scan_modules = True
+
+                modules = []
+                if should_scan_modules:
+                    try:
+                        modules = canvas_get_all(f"/api/v1/courses/{course_id}/modules", {"per_page": 100})
+                    except AuthFailure:
+                        raise
+                    except Exception as exc:
+                        print(f"ERROR listing modules for course {course_id}: {exc}", file=sys.stderr)
+                        stats["errors"] += 1
+                        modules = []
 
                 # Scan every module's items for File, Page, and ExternalUrl content.
-                # (type, ref, title): ref is file_id str / page_url str / external_url str.
+                # (type, ref, title, module_name, module_folder_id): organize by module
                 raw_module_items, seen_refs = [], set()
+                module_folders = {}  # {module_name: folder_id}
                 for mod in modules:
                     if mod.get("items_count", 0) == 0:
                         continue
+                    module_name = mod.get("name", f"Module {mod.get('id')}")
+                    # Create module subfolder under Notes
+                    try:
+                        module_folder_id = find_or_create_subfolder(all_docs, collection_id, notes_folder_id, module_name)
+                        module_folders[module_name] = module_folder_id
+                    except Exception as exc:
+                        print(f"ERROR creating module folder '{module_name}': {exc}", file=sys.stderr)
+                        continue
+
                     try:
                         items = canvas_get_all(
                             f"/api/v1/courses/{course_id}/modules/{mod['id']}/items",
@@ -999,9 +1135,12 @@ data:
                         if not ref or key in seen_refs:
                             continue
                         seen_refs.add(key)
-                        raw_module_items.append((itype, ref, item.get("title") or ref))
+                        raw_module_items.append((itype, ref, item.get("title") or ref, module_name, module_folder_id))
 
-                for itype, ref, title in raw_module_items:
+                # Collect all module folder IDs for searching
+                all_module_parents = set(module_folders.values()) | {notes_folder_id}
+
+                for itype, ref, title, module_name, module_folder_id in raw_module_items:
                     if itype == "File":
                         try:
                             meta = canvas_get(f"/api/v1/files/{ref}")
@@ -1018,10 +1157,21 @@ data:
                                 or "presentationml" in ct or name_lower.endswith(".pptx")):
                             continue
                         name = disp
-                        if find_child_document(all_docs, notes_folder_id, name) is not None:
-                            stats["skipped"] += 1
+                        # Check if item exists in any module folder or old flat Notes
+                        existing_id, existing_parent = None, None
+                        for d in all_docs:
+                            if d.get("title") == name and d.get("parentDocumentId") in all_module_parents:
+                                existing_id = d["id"]
+                                existing_parent = d.get("parentDocumentId")
+                                break
+                        if existing_id is not None:
+                            if existing_parent != module_folder_id:
+                                # Wrong module folder - move it
+                                course_items.append(("move", course_name, module_folder_id, name, existing_id))
+                            else:
+                                stats["skipped"] += 1
                             continue
-                        course_items.append(("file", course_name, notes_folder_id, name, meta))
+                        course_items.append(("file", course_name, module_folder_id, name, meta))
 
                     elif itype == "Page":
                         try:
@@ -1035,21 +1185,41 @@ data:
                         if len(text) < 300:
                             continue  # skip near-empty pages (index, link-only, etc.)
                         name = page_data.get("title") or title
-                        if find_child_document(all_docs, notes_folder_id, name) is not None:
-                            stats["skipped"] += 1
+                        # Check if item exists in any module folder
+                        existing_id, existing_parent = None, None
+                        for d in all_docs:
+                            if d.get("title") == name and d.get("parentDocumentId") in all_module_parents:
+                                existing_id = d["id"]
+                                existing_parent = d.get("parentDocumentId")
+                                break
+                        if existing_id is not None:
+                            if existing_parent != module_folder_id:
+                                course_items.append(("move", course_name, module_folder_id, name, existing_id))
+                            else:
+                                stats["skipped"] += 1
                             continue
-                        course_items.append(("page", course_name, notes_folder_id, name, text))
+                        course_items.append(("page", course_name, module_folder_id, name, text))
 
                     elif itype == "ExternalUrl":
                         name = title
-                        if find_child_document(all_docs, notes_folder_id, name) is not None:
-                            stats["skipped"] += 1
+                        # Check if item exists in any module folder
+                        existing_id, existing_parent = None, None
+                        for d in all_docs:
+                            if d.get("title") == name and d.get("parentDocumentId") in all_module_parents:
+                                existing_id = d["id"]
+                                existing_parent = d.get("parentDocumentId")
+                                break
+                        if existing_id is not None:
+                            if existing_parent != module_folder_id:
+                                course_items.append(("move", course_name, module_folder_id, name, existing_id))
+                            else:
+                                stats["skipped"] += 1
                             continue
                         yt_match = YT_URL_RE.search(ref)
                         if yt_match:
-                            course_items.append(("youtube", course_name, notes_folder_id, name, yt_match.group(1)))
+                            course_items.append(("youtube", course_name, module_folder_id, name, yt_match.group(1)))
                         else:
-                            course_items.append(("url", course_name, notes_folder_id, name, ref))
+                            course_items.append(("url", course_name, module_folder_id, name, ref))
 
                 if course_items:
                     pending_by_course.append(course_items)
@@ -1061,9 +1231,10 @@ data:
                     if items:
                         round_robin.append(items.pop(0))
 
-            for item_type, course_name, parent_doc_id, name, item_data in round_robin:
+            for item_type, *item_args in round_robin:
                 # Moves don't count toward MAX_NEW_PER_RUN -- they're cheap (no LLM call)
                 if item_type == "move":
+                    course_name, parent_doc_id, name, item_data = item_args
                     try:
                         outline_post("documents.move", {
                             "id": item_data,
@@ -1075,23 +1246,48 @@ data:
                                 d["parentDocumentId"] = parent_doc_id
                                 break
                         stats["moved"] += 1
-                        print(f"moved '{course_name} / {name}' to correct bucket")
+                        print(f"moved '{course_name} / {name}' to correct location")
                     except Exception as exc:
                         print(f"ERROR moving '{name}': {exc}", file=sys.stderr)
+                        stats["errors"] += 1
+                    continue
+
+                # mark_submitted is also cheap (no LLM call)
+                if item_type == "mark_submitted":
+                    course_name, parent_doc_id, name, existing_id = item_args
+                    try:
+                        doc_info = outline_post("documents.info", {"id": existing_id})
+                        current_text = doc_info.get("text", "")
+                        if "✓ Submitted" not in current_text:
+                            new_text = current_text.replace("**Course:**", "**Status:** ✓ Submitted\n\n**Course:**", 1)
+                            outline_post("documents.update", {"id": existing_id, "text": new_text, "publish": True})
+                            stats["marked_submitted"] += 1
+                            print(f"marked '{course_name} / {name}' as submitted")
+                    except Exception as exc:
+                        print(f"ERROR marking submitted '{name}': {exc}", file=sys.stderr)
                         stats["errors"] += 1
                     continue
 
                 if stats["created"] >= MAX_NEW_PER_RUN:
                     stats["capped"] += 1
                     continue
+
                 try:
                     if item_type == "assignment":
+                        course_name, parent_doc_id, name, item_data = item_args
                         doc_text = generate_notes(course_name, item_data)
                         new_id = create_document(collection_id, parent_doc_id, name, doc_text)
                         all_docs.append({"id": new_id, "title": name, "parentDocumentId": parent_doc_id})
                         stats["created"] += 1
                         print(f"created assignment notes for '{course_name} / {name}'")
+
+                    elif item_type == "regen":
+                        course_name, parent_doc_id, name, assignment, existing_id = item_args
+                        generate_notes(course_name, assignment, existing_id=existing_id)
+                        stats["regenerated"] += 1
+                        print(f"regenerated notes for '{course_name} / {name}'")
                     elif item_type == "file":
+                        course_name, parent_doc_id, name, item_data = item_args
                         f = fetch_canvas_file(item_data["id"])
                         if f is None:
                             print(f"WARNING: skipping '{name}': file too large or unavailable", file=sys.stderr)
@@ -1106,6 +1302,7 @@ data:
                         print(f"created file notes for '{course_name} / {name}'")
 
                     elif item_type == "page":
+                        course_name, parent_doc_id, name, item_data = item_args
                         # item_data is already the stripped page text
                         doc_text = generate_text_notes(course_name, name, item_data, "Canvas Page")
                         new_id = create_document(collection_id, parent_doc_id, name, doc_text)
@@ -1114,6 +1311,7 @@ data:
                         print(f"created page notes for '{course_name} / {name}'")
 
                     elif item_type == "youtube":
+                        course_name, parent_doc_id, name, item_data = item_args
                         # item_data is the YouTube video ID
                         transcript, reason = get_youtube_transcript(item_data)
                         if transcript is None:
@@ -1126,6 +1324,7 @@ data:
                         print(f"created YouTube notes for '{course_name} / {name}'")
 
                     elif item_type == "url":
+                        course_name, parent_doc_id, name, item_data = item_args
                         # item_data is the raw URL
                         text, reason = fetch_url_text(item_data)
                         if text is None:
@@ -1147,8 +1346,17 @@ data:
             sys.exit(1)
 
         resolve_credential_alarm()
+
+        # Update state timestamps after successful run
+        now = datetime.now(timezone.utc).isoformat()
+        state["last_assignments_run"] = now
+        if should_scan_modules:
+            state["last_modules_run"] = now
+        write_state(state)
+
         print(
             f"canvas-outline-notes: created={stats['created']} moved={stats['moved']} "
+            f"regenerated={stats['regenerated']} marked_submitted={stats['marked_submitted']} "
             f"skipped={stats['skipped']} locked-waiting={stats['locked']} "
             f"capped-for-next-run={stats['capped']} errors={stats['errors']}"
         )

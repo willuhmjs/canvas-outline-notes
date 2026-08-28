@@ -26,6 +26,7 @@ spec:
       template:
         spec:
           restartPolicy: Never
+          serviceAccountName: canvas-outline-notes
           imagePullSecrets:
             - name: ghcr-pull-secret
           containers:

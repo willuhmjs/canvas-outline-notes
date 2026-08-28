@@ -17,9 +17,12 @@ spec:
       template:
         spec:
           restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-pull-secret
           containers:
             - name: canvas-sync
-              image: python:3.12-alpine
+              image: ghcr.io/willuhmjs/canvas-outline-notes:sha-2713561
+              imagePullPolicy: IfNotPresent
               command: ["python3", "/scripts/sync.py"]
               env:
                 - name: PYTHONUNBUFFERED
