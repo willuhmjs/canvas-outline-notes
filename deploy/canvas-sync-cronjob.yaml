@@ -1,0 +1,75 @@
+# Upserts Canvas assignment due dates into the "Academics" CalDAV calendar as VTODOs.
+# See README.md for the one-time manual secret bootstrap (canvas-sync-secrets).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: canvas-sync
+  namespace: dav
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 120
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: canvas-sync
+              image: python:3.12-alpine
+              command: ["python3", "/scripts/sync.py"]
+              env:
+                - name: PYTHONUNBUFFERED
+                  value: "1"
+                - name: DAV_BASE_URL
+                  value: "http://davis.dav.svc.cluster.local:9000"
+                - name: DAV_CALENDAR_DISPLAYNAME
+                  value: "Academics"
+                - name: CANVAS_ICS_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: canvas-sync-secrets
+                      key: CANVAS_ICS_URL
+                - name: DAV_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: canvas-sync-secrets
+                      key: DAV_USERNAME
+                - name: DAV_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: canvas-sync-secrets
+                      key: DAV_PASSWORD
+                # Optional: enables auto-completing tasks Canvas shows as submitted/graded/
+                # excused. Sync works fine without it (just no auto-completion) if this key
+                # isn't present in the secret.
+                - name: CANVAS_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: canvas-sync-secrets
+                      key: CANVAS_API_TOKEN
+                      optional: true
+                # Optional: set by canvas-token-updater whenever a token is saved, used to
+                # self-schedule a renewal reminder (Canvas has no API to check real expiry).
+                - name: CANVAS_API_TOKEN_ISSUED_AT
+                  valueFrom:
+                    secretKeyRef:
+                      name: canvas-sync-secrets
+                      key: CANVAS_API_TOKEN_ISSUED_AT
+                      optional: true
+              resources:
+                limits:
+                  memory: 128Mi
+                requests:
+                  memory: 32Mi
+              volumeMounts:
+                - name: script
+                  mountPath: /scripts
+                  readOnly: true
+          volumes:
+            - name: script
+              configMap:
+                name: canvas-sync-script
