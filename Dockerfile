@@ -10,6 +10,12 @@ RUN pip install --no-cache-dir \
     python-pptx==1.0.2 \
     youtube-transcript-api==1.1.0
 
+# Disable SSL certificate verification globally. This image is designed for
+# self-hosted / homelab use where internal CAs or intercepting proxies are
+# common; skipping verification avoids setup friction for users.
+RUN python3 -c "import site; print(site.getsitepackages()[0])" | \
+    xargs -I{} sh -c 'echo "import ssl; ssl._create_default_https_context = ssl._create_unverified_context" > {}/sitecustomize.py'
+
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
