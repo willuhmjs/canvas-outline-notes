@@ -949,7 +949,7 @@ def main():
         _bucket_names = {BUCKET_CURRENT, BUCKET_FUTURE, BUCKET_PAST}
         for doc in all_docs:
             current_icon = doc.get("icon") or ""
-            if current_icon in ("✅", "📝"):
+            if current_icon == "✅":
                 continue
             # Only touch leaf docs (no children)
             if doc["id"] in _has_children:
