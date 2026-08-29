@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: canvas-token-updater
+  namespace: dav
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: canvas-token-updater
+  template:
+    metadata:
+      labels:
+        app: canvas-token-updater
+    spec:
+      serviceAccountName: canvas-notes
+      containers:
+      - name: token-updater
+        image: ghcr.io/willuhmjs/canvas-outline-notes:latest
+        command: ["python3", "/app/token_updater.py"]
+        env:
+        - name: K8S_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: SECRET_NAME
+          value: "canvas-sync-secrets"
+        - name: PORT
+          value: "8080"
+        ports:
+        - containerPort: 8080
+          name: http
+        resources:
+          requests:
+            memory: 32Mi
+            cpu: 10m
+          limits:
+            memory: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: canvas-token-updater
+  namespace: dav
+spec:
+  selector:
+    app: canvas-token-updater
+  ports:
+  - port: 8080
+    targetPort: 8080
+    name: http

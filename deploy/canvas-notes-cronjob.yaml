@@ -1,10 +1,10 @@
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: canvas-sync
+  name: canvas-notes
   namespace: dav
 spec:
-  schedule: "*/15 * * * *"
+  schedule: "0 * * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 1
   failedJobsHistoryLimit: 3
@@ -15,15 +15,14 @@ spec:
           serviceAccountName: canvas-notes
           restartPolicy: Never
           containers:
-          - name: sync
+          - name: notes
             image: ghcr.io/willuhmjs/canvas-outline-notes:latest
-            command: ["python3", "/app/sync.py"]
+            command: ["python3", "/app/notes.py"]
             envFrom:
             - secretRef:
                 name: canvas-sync-secrets
             - secretRef:
                 name: canvas-outline-secrets
-                optional: true
             env:
             - name: DAV_BASE_URL
               value: "http://davis.dav.svc.cluster.local:9000"
@@ -31,6 +30,16 @@ spec:
               value: "Academics"
             - name: CANVAS_BASE_URL
               value: "https://canvas.odu.edu"
+            - name: CHAT_API_BASE_URL
+              value: "https://chat.cs.odu.edu/api/v1"
+            - name: CHAT_MODEL_TEXT
+              value: "gpt-oss-120b"
+            - name: CHAT_MODEL_VISION
+              value: "gemma-4-31b"
+            - name: OUTLINE_BASE_URL
+              value: "https://outline.will.net"
+            - name: OUTLINE_COLLECTION_NAME
+              value: "Automatic Notes"
             - name: STATE_FILE
               value: "/data/state.json"
             - name: TOKEN_FILE

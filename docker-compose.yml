@@ -1,0 +1,82 @@
+services:
+  davis:
+    image: ghcr.io/tchapi/davis-standalone:latest
+    environment:
+      APP_ENV: prod
+      DATABASE_DRIVER: pgsql
+      DATABASE_HOST: postgres
+      DATABASE_PORT: "5432"
+      DATABASE_NAME: davis
+      DATABASE_USER: davis
+      DATABASE_PASSWORD: ${DAVIS_DB_PASSWORD}
+      ADMIN_LOGIN: ${DAV_USERNAME}
+      ADMIN_PASSWORD: ${DAV_PASSWORD}
+      AUTH_REALM: ${DAV_CALENDAR_DISPLAYNAME:-Academics}
+    ports:
+      - "9000:9000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: davis
+      POSTGRES_USER: davis
+      POSTGRES_PASSWORD: ${DAVIS_DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "davis"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  canvas-notes:
+    image: ghcr.io/willuhmjs/canvas-outline-notes:latest
+    environment:
+      # Canvas
+      CANVAS_ICS_URL: ${CANVAS_ICS_URL}
+      CANVAS_BASE_URL: ${CANVAS_BASE_URL:-https://canvas.odu.edu}
+      # CalDAV (Davis)
+      DAV_BASE_URL: http://davis:9000
+      DAV_USERNAME: ${DAV_USERNAME}
+      DAV_PASSWORD: ${DAV_PASSWORD}
+      DAV_CALENDAR_DISPLAYNAME: ${DAV_CALENDAR_DISPLAYNAME:-Academics}
+      # Outline (optional — omit to disable AI notes)
+      OUTLINE_BASE_URL: ${OUTLINE_BASE_URL:-}
+      OUTLINE_API_TOKEN: ${OUTLINE_API_TOKEN:-}
+      OUTLINE_COLLECTION_NAME: ${OUTLINE_COLLECTION_NAME:-Automatic Notes}
+      # LLM (required for AI notes)
+      CHAT_API_BASE_URL: ${CHAT_API_BASE_URL:-}
+      CHAT_API_KEY: ${CHAT_API_KEY:-}
+      CHAT_MODEL_TEXT: ${CHAT_MODEL_TEXT:-gpt-4o-mini}
+      CHAT_MODEL_VISION: ${CHAT_MODEL_VISION:-gpt-4o}
+      # Schedule (minutes)
+      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-15}
+      NOTES_INTERVAL_MINUTES: ${NOTES_INTERVAL_MINUTES:-60}
+      # State + token file (shared volume)
+      STATE_FILE: /data/state.json
+      TOKEN_FILE: /data/token.json
+    volumes:
+      - canvas_data:/data
+    depends_on:
+      - davis
+    restart: unless-stopped
+
+  token-updater:
+    image: ghcr.io/willuhmjs/canvas-outline-notes:latest
+    command: ["python3", "/app/token_updater.py"]
+    environment:
+      TOKEN_FILE: /data/token.json
+      PORT: "8080"
+    ports:
+      - "8080:8080"
+    volumes:
+      - canvas_data:/data
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  canvas_data:

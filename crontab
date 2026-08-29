@@ -1,0 +1,2 @@
+*/15 * * * * python3 /app/sync.py
+0 * * * * python3 /app/notes.py

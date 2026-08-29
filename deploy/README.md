@@ -1,66 +1,58 @@
-# Deployment
+# Kubernetes Deployment
 
-This directory contains Kubernetes manifests for deploying canvas-outline-notes.
+The scripts are baked into the image — no ConfigMaps needed.
 
-## Architecture
-
-**Long-running Deployment (Recommended):**
-- `deployment.yaml` - Single pod running both sync and notes on schedules
-- Simpler than CronJobs, uses less resources
-- State persisted in emptyDir volume (resets on pod restart, which is fine - will just re-sync)
-
-**Legacy CronJob approach:**
-- `canvas-sync-cronjob.yaml` + `canvas-outline-cronjob.yaml` - Separate cron jobs
-- Requires `canvas-notes-serviceaccount.yaml` for state management
-- More complex, kept for compatibility
-
-## Configuration
-
-1. **Create secrets:**
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: canvas-secrets
-  namespace: dav
-stringData:
-  CANVAS_ICS_URL: "https://canvas.example.edu/feeds/calendars/user_xxx.ics"
-  CANVAS_API_TOKEN: "your-token-here"
-  CANVAS_API_TOKEN_ISSUED_AT: "2026-01-01"
-  DAV_USERNAME: "username"
-  DAV_PASSWORD: "password"
-  CHAT_API_KEY: "your-llm-api-key"
-  OUTLINE_API_TOKEN: "your-outline-token"
-```
-
-2. **Update environment variables in deployment.yaml:**
-- `CANVAS_BASE_URL` - Your Canvas instance
-- `DAV_BASE_URL` - Your CalDAV server
-- `CHAT_API_BASE_URL` - Your LLM API endpoint
-- `OUTLINE_BASE_URL` - Your Outline instance
-- `SYNC_INTERVAL_MINUTES` - How often to sync assignments (default: 15)
-- `NOTES_INTERVAL_MINUTES` - How often to generate notes (default: 60)
-
-3. **Copy scripts to ConfigMap:**
-The scripts are in separate ConfigMaps for clarity:
-- `canvas-sync-configmap.yaml` - CalDAV sync script
-- `canvas-outline-configmap.yaml` - Note generation script
-
-Combine them into a single ConfigMap named `canvas-scripts` or use kustomize to merge.
-
-## Deploy
+## Quick start
 
 ```bash
-kubectl apply -f namespace.yaml
-kubectl apply -f canvas-secrets.yaml  # your secrets
-kubectl apply -f canvas-sync-configmap.yaml
-kubectl apply -f canvas-outline-configmap.yaml
-kubectl apply -f deployment.yaml
-```
+# 1. Apply PVC (once, before anything else)
+kubectl apply -f pvc.yaml
 
-Or use the legacy CronJob approach:
-```bash
+# 2. Apply RBAC (ServiceAccount for token updater)
 kubectl apply -f canvas-notes-serviceaccount.yaml
+
+# 3. Create secrets (see canvas-outline-secret.example.yaml)
+kubectl create secret generic canvas-sync-secrets -n dav \
+  --from-literal=CANVAS_ICS_URL=... \
+  --from-literal=DAV_USERNAME=... \
+  --from-literal=DAV_PASSWORD=...
+
+kubectl create secret generic canvas-outline-secrets -n dav \
+  --from-literal=CHAT_API_KEY=... \
+  --from-literal=OUTLINE_API_TOKEN=...
+
+# 4. Deploy CronJobs + token updater
 kubectl apply -f canvas-sync-cronjob.yaml
-kubectl apply -f canvas-outline-cronjob.yaml
+kubectl apply -f canvas-notes-cronjob.yaml
+kubectl apply -f token-updater-deployment.yaml
 ```
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `pvc.yaml` | Shared storage for state file and token file |
+| `canvas-notes-serviceaccount.yaml` | RBAC for token updater to patch secrets |
+| `canvas-sync-cronjob.yaml` | Syncs Canvas → CalDAV every 15 min |
+| `canvas-notes-cronjob.yaml` | Generates AI study notes every hour |
+| `token-updater-deployment.yaml` | Web form for rotating Canvas API token |
+
+## Triggering manually
+
+```bash
+# Run sync now
+kubectl create job -n dav canvas-sync-manual --from=cronjob/canvas-sync
+
+# Run notes now
+kubectl create job -n dav canvas-notes-manual --from=cronjob/canvas-notes
+
+# View logs
+kubectl logs -n dav job/canvas-sync-manual
+kubectl logs -n dav job/canvas-notes-manual
+```
+
+## Token updater
+
+Expose the token updater behind your auth proxy (e.g. Authentik forward-auth).
+It auto-detects Kubernetes and patches `canvas-sync-secrets` directly.
+No manual `kubectl` needed to rotate the 90-day Canvas token.

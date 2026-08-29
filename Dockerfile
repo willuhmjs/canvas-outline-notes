@@ -1,25 +1,27 @@
 FROM python:3.12-slim
 
-LABEL org.opencontainers.image.source="https://github.com/willuhmjs/canvas-outline-notes"
-LABEL org.opencontainers.image.description="Canvas assignment and lecture-file notes generator → Outline"
-LABEL org.opencontainers.image.licenses="MIT"
+# Install supercronic (Docker scheduling) and ca-certificates (for custom CA injection)
+ARG SUPERCRONIC_VERSION=0.2.33
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates wget && \
+    wget -qO /usr/local/bin/supercronic \
+      "https://github.com/aptible/supercronic/releases/download/v${SUPERCRONIC_VERSION}/supercronic-linux-amd64" && \
+    chmod +x /usr/local/bin/supercronic && \
+    apt-get purge -y wget && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir \
-    pymupdf==1.28.2 \
-    python-docx==1.2.0 \
-    python-pptx==1.0.2 \
-    youtube-transcript-api==1.1.0
+# Global SSL no-verify for self-hosted instances with internal CAs.
+# Override at runtime by mounting your CA cert and setting SSL_CERT_FILE.
+RUN python3 -c "import site; open(site.getsitepackages()[0]+'/sitecustomize.py','w').write('import ssl; ssl._create_default_https_context = ssl._create_unverified_context\n')"
 
-# Disable SSL certificate verification globally. This image is designed for
-# self-hosted / homelab use where internal CAs or intercepting proxies are
-# common; skipping verification avoids setup friction for users.
-RUN python3 -c "import site; print(site.getsitepackages()[0])" | \
-    xargs -I{} sh -c 'echo "import ssl; ssl._create_default_https_context = ssl._create_unverified_context" > {}/sitecustomize.py'
+WORKDIR /app
 
-COPY scheduler.py /scheduler.py
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Default to scheduler mode, but allow override for one-off jobs
-CMD ["python3", "/scheduler.py"]
-ENTRYPOINT []
+COPY sync.py notes.py token_updater.py crontab ./
+
+# Default: run both scripts on schedule via supercronic (Docker / bare-metal mode).
+# Override CMD for single-task use:
+#   python3 /app/sync.py          — run sync once
+#   python3 /app/notes.py         — run notes once
+#   python3 /app/token_updater.py — run token updater web server
+CMD ["supercronic", "/app/crontab"]
