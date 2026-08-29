@@ -942,36 +942,46 @@ def main():
         collection_id = find_or_create_collection(OUTLINE_COLLECTION_NAME)
         all_docs = list_all_documents(collection_id)
 
-        # Backfill icons on existing assignment docs that are missing them.
-        # Submitted docs get ✅, pending docs get 📝. Runs once per session cheaply.
-        _by_id = {d["id"]: d for d in all_docs}
-        _has_children = {d.get("parentDocumentId") for d in all_docs if d.get("parentDocumentId")}
-        _bucket_names = {BUCKET_CURRENT, BUCKET_FUTURE, BUCKET_PAST}
-        for doc in all_docs:
-            current_icon = doc.get("icon") or ""
-            if current_icon == "✅":
-                continue
-            # Only touch leaf docs (no children)
-            if doc["id"] in _has_children:
-                continue
-            # Only touch docs whose direct parent is a time bucket (Current/Future/Past)
-            parent = _by_id.get(doc.get("parentDocumentId", ""), {})
-            if parent.get("title") not in _bucket_names:
-                continue
-            try:
-                doc_info = outline_post("documents.info", {"id": doc["id"]})
-                text = doc_info.get("text", "")
-                icon = "✅" if "✓ Submitted" in text else "📝"
-                if icon != current_icon:
-                    outline_post("documents.update", {"id": doc["id"], "icon": icon, "publish": True})
-                    doc["icon"] = icon
-            except Exception:
-                pass
-
         courses = current_term_courses(canvas_get_all("/api/v1/courses", {"enrollment_state": "active", "per_page": 100}))
 
         # Build completion map once for all courses
         completion_map = build_completion_map(courses)
+
+        # Backfill icons on existing assignment docs that are missing or outdated.
+        # Uses completion_map directly so it works even on legacy docs without a hash.
+        # Submitted (Canvas confirmed done) → ✅, pending → 📝.
+        _by_id = {d["id"]: d for d in all_docs}
+        _has_children = {d.get("parentDocumentId") for d in all_docs if d.get("parentDocumentId")}
+        _bucket_names = {BUCKET_CURRENT, BUCKET_FUTURE, BUCKET_PAST}
+        # Build title→assignment_id map from completion_map assignments
+        _title_to_done = {}
+        for course in courses:
+            course_id = course.get("id")
+            if not course_id:
+                continue
+            try:
+                for a in canvas_get_all(f"/api/v1/courses/{course_id}/assignments", {"per_page": 100}):
+                    _title_to_done[a.get("name", "")] = completion_map.get(str(a.get("id")), False)
+            except Exception:
+                pass
+        for doc in all_docs:
+            current_icon = doc.get("icon") or ""
+            if doc["id"] in _has_children:
+                continue
+            parent = _by_id.get(doc.get("parentDocumentId", ""), {})
+            if parent.get("title") not in _bucket_names:
+                continue
+            title = doc.get("title", "")
+            done = _title_to_done.get(title)
+            if done is None:
+                continue  # can't determine, leave alone
+            want_icon = "✅" if done else "📝"
+            if want_icon != current_icon:
+                try:
+                    outline_post("documents.update", {"id": doc["id"], "icon": want_icon, "publish": True})
+                    doc["icon"] = want_icon
+                except Exception:
+                    pass
 
         # Gather each course's pending items (assignments + lecture files) first,
         # then interleave round-robin across courses so no single course monopolizes
@@ -1076,6 +1086,21 @@ def main():
                                             stats["skipped"] += 1
                                     else:
                                         stats["skipped"] += 1
+                        # No hash (legacy doc) -- still run the submitted check
+                        else:
+                            assignment_id = str(assignment.get("id", ""))
+                            due_at = assignment.get("due_at")
+                            if (due_at and completion_map.get(assignment_id) and
+                                "✓ Submitted" not in existing_text):
+                                try:
+                                    due = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
+                                    days_diff = abs((due.date() - datetime.now(timezone.utc).date()).days)
+                                    if days_diff <= 30:
+                                        course_items.append(("mark_submitted", course_name, target_folder_id, name, existing_id))
+                                    else:
+                                        stats["skipped"] += 1
+                                except Exception:
+                                    stats["skipped"] += 1
                             else:
                                 stats["skipped"] += 1
                         except Exception as exc:
