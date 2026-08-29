@@ -19,7 +19,18 @@ export const load: PageServerLoad = async () => {
 	}
 
 	const tokenStatus = computeTokenStatus(issuedAt);
-	return { tokenStatus, tokenLength };
+
+	let canvasBaseUrl = 'https://canvas.odu.edu';
+	if (isKubernetes()) {
+		const { getConfigMapData } = await import('$lib/k8s');
+		const cfg = await getConfigMapData('canvas-config').catch(() => ({}));
+		canvasBaseUrl = cfg.CANVAS_BASE_URL ?? canvasBaseUrl;
+	} else {
+		const settings = readDockerSettings();
+		canvasBaseUrl = settings.config?.CANVAS_BASE_URL ?? canvasBaseUrl;
+	}
+
+	return { tokenStatus, tokenLength, canvasBaseUrl };
 };
 
 export const actions: Actions = {

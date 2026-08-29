@@ -4,7 +4,7 @@
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
-	const { tokenStatus, tokenLength } = $derived(data);
+	const { tokenStatus, tokenLength, canvasBaseUrl } = $derived(data);
 
 	let showToken = $state(false);
 
@@ -167,19 +167,33 @@
 	</div>
 
 	<!-- Instructions card -->
-	<div class="card space-y-3 border-slate-700/60">
-		<h2 class="text-base font-semibold text-slate-200">How to get a new token</h2>
+	<div class="card space-y-4 border-slate-700/60">
+		<div class="flex items-start justify-between gap-4">
+			<div>
+				<h2 class="text-base font-semibold text-slate-200">How to get a new token</h2>
+				<p class="text-xs text-slate-500 mt-0.5">Opens directly to the token settings page</p>
+			</div>
+			<a
+				href="{canvasBaseUrl}/profile/settings#access_tokens"
+				target="_blank"
+				rel="noopener noreferrer"
+				class="shrink-0 inline-flex items-center gap-2 rounded-lg bg-red-600 hover:bg-red-500 active:bg-red-700 px-4 py-2 text-sm font-medium text-white transition-colors"
+			>
+				<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+					<path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+				</svg>
+				Open Canvas Settings
+			</a>
+		</div>
 		<ol class="text-sm text-slate-300 space-y-2 list-decimal list-inside">
-			<li>Open Canvas and go to <strong class="text-slate-100">Account → Settings</strong></li>
 			<li>Scroll to <strong class="text-slate-100">Approved Integrations</strong></li>
 			<li>Click <strong class="text-slate-100">+ New Access Token</strong></li>
-			<li>Enter a purpose (e.g. "canvas-sync") — set no expiry date (Canvas caps them at ~90 days anyway)</li>
-			<li>Click <strong class="text-slate-100">Generate Token</strong> and copy it immediately</li>
-			<li>Paste it in the form below and click <strong class="text-slate-100">Save Token</strong></li>
+			<li>Enter a purpose (e.g. "canvas-sync") — leave expiry blank</li>
+			<li>Click <strong class="text-slate-100">Generate Token</strong>, copy it</li>
+			<li>Paste below and click <strong class="text-slate-100">Save Token</strong></li>
 		</ol>
 		<p class="text-xs text-slate-500">
-			Note: Canvas doesn't expose the real expiry date via API, so the bar above is an estimate
-			based on the ~90-day cap from when the token was entered here.
+			Canvas doesn't expose the real expiry via API — the bar above is an estimate based on the ~90-day cap.
 		</p>
 	</div>
 
