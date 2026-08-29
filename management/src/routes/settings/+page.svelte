@@ -454,8 +454,7 @@
 						name="CHAT_PROMPT_ASSIGNMENT"
 						rows="18"
 						class="form-input font-mono text-xs leading-relaxed resize-y"
-						placeholder={DEFAULT_PROMPT_ASSIGNMENT}
-					>{data.config.CHAT_PROMPT_ASSIGNMENT ?? ''}</textarea>
+					>{data.config.CHAT_PROMPT_ASSIGNMENT || DEFAULT_PROMPT_ASSIGNMENT}</textarea>
 					<div class="flex items-center justify-between mt-1">
 						<p class="text-xs text-slate-500">
 							Variables: <code class="text-slate-400">{'{course}'}</code>,
@@ -486,8 +485,7 @@
 						name="CHAT_PROMPT_PRESENTATION"
 						rows="16"
 						class="form-input font-mono text-xs leading-relaxed resize-y"
-						placeholder={DEFAULT_PROMPT_PRESENTATION}
-					>{data.config.CHAT_PROMPT_PRESENTATION ?? ''}</textarea>
+					>{data.config.CHAT_PROMPT_PRESENTATION || DEFAULT_PROMPT_PRESENTATION}</textarea>
 					<div class="flex items-center justify-between mt-1">
 						<p class="text-xs text-slate-500">
 							Variables: <code class="text-slate-400">{'{course}'}</code>,
@@ -512,8 +510,7 @@
 						name="CHAT_PROMPT_TEXT_NOTES"
 						rows="16"
 						class="form-input font-mono text-xs leading-relaxed resize-y"
-						placeholder={DEFAULT_PROMPT_TEXT_NOTES}
-					>{data.config.CHAT_PROMPT_TEXT_NOTES ?? ''}</textarea>
+					>{data.config.CHAT_PROMPT_TEXT_NOTES || DEFAULT_PROMPT_TEXT_NOTES}</textarea>
 					<div class="flex items-center justify-between mt-1">
 						<p class="text-xs text-slate-500">
 							Variables: <code class="text-slate-400">{'{course}'}</code>,

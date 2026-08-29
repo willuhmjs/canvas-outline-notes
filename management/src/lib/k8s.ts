@@ -476,25 +476,50 @@ function updateJobRecord(id: string, updates: Partial<DockerJobRecord>): void {
 
 // ── Aggregated settings access ────────────────────────────────────────────────
 
+// Defaults matching sync.py / notes.py so the settings UI is never blank.
+// These are merged under whatever's in the ConfigMap / settings.json.
+const CONFIG_DEFAULTS: Record<string, string> = {
+	CANVAS_BASE_URL: 'https://canvas.odu.edu',
+	DAV_BASE_URL: 'http://davis:9000',
+	DAV_CALENDAR_DISPLAYNAME: 'Academics',
+	OUTLINE_BASE_URL: '',
+	OUTLINE_COLLECTION_NAME: 'Automatic Notes',
+	CHAT_API_BASE_URL: 'https://chat.cs.odu.edu/api/v1',
+	CHAT_MODEL_TEXT: 'gpt-oss-120b',
+	CHAT_MODEL_VISION: 'gemma-4-31b',
+	TZ: 'America/New_York',
+	SYNC_INTERVAL_MINUTES: '15',
+	NOTES_INTERVAL_MINUTES: '60',
+	ALARM_TRIGGER: 'PT6H',
+	CURRENT_WINDOW_DAYS: '14',
+	COMPLETION_LOOKBACK_DAYS: '30',
+	// Prompts: empty string here means the UI will load defaults from prompts.ts client-side
+	CHAT_PROMPT_ASSIGNMENT: '',
+	CHAT_PROMPT_PRESENTATION: '',
+	CHAT_PROMPT_TEXT_NOTES: ''
+};
+
 export async function getAllSettings(): Promise<{
 	syncSecrets: Record<string, string>;
 	outlineSecrets: Record<string, string>;
 	config: Record<string, string>;
 }> {
 	if (isKubernetes()) {
-		const [syncSecrets, outlineSecrets, config] = await Promise.all([
+		const [syncSecrets, outlineSecrets, rawConfig] = await Promise.all([
 			getSecretData('canvas-sync-secrets'),
 			getSecretData('canvas-outline-secrets'),
 			getConfigMapData('canvas-config')
 		]);
+		const config = { ...CONFIG_DEFAULTS, ...rawConfig };
 		return { syncSecrets, outlineSecrets, config };
 	}
 
 	const s = readDockerSettings();
+	const rawConfig = (s.config ?? {}) as Record<string, string>;
 	return {
 		syncSecrets: (s.secrets['canvas-sync-secrets'] ?? {}) as Record<string, string>,
 		outlineSecrets: (s.secrets['canvas-outline-secrets'] ?? {}) as Record<string, string>,
-		config: (s.config ?? {}) as Record<string, string>
+		config: { ...CONFIG_DEFAULTS, ...rawConfig }
 	};
 }
 
