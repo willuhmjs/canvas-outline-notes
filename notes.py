@@ -34,6 +34,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode, urljoin
+import zoneinfo
 
 import docx  # python-docx
 import pymupdf as fitz  # "import fitz" is a deprecated compat shim scheduled for removal
@@ -53,6 +54,20 @@ _ssl_ctx.verify_mode = ssl.CERT_NONE
 urllib.request.install_opener(
     urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ssl_ctx))
 )
+
+DISPLAY_TZ = zoneinfo.ZoneInfo(os.environ.get("TZ", "America/New_York"))
+
+
+def format_due(iso_str):
+    """Format a Canvas ISO 8601 due date into a human-readable local time string."""
+    if not iso_str:
+        return "no due date"
+    try:
+        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00")).astimezone(DISPLAY_TZ)
+        return dt.strftime("%a %b %-d, %Y %-I:%M %p %Z")
+    except Exception:
+        return iso_str
+
 
 CANVAS_BASE_URL = os.environ.get("CANVAS_BASE_URL", "https://canvas.odu.edu").rstrip("/")
 CANVAS_API_TOKEN = os.environ.get("CANVAS_API_TOKEN", "")
@@ -442,7 +457,7 @@ def build_messages(course, assignment, description_text, extracted_texts, image_
     prompt = PROMPT_TEMPLATE.format(
         course=course,
         name=assignment.get("name"),
-        due=assignment.get("due_at") or "no due date",
+        due=format_due(assignment.get("due_at")),
         points=assignment.get("points_possible", "n/a"),
         submission_types=submission_types,
         rubric_text=(rubric_text + "\n") if rubric_text else "",
@@ -535,7 +550,7 @@ def generate_notes(course_name, assignment, existing_id=None):
     # paragraph breaks (blank line between each) render correctly instead.
     header = (
         f"**Course:** {course_name}\n\n"
-        f"**Due:** {assignment.get('due_at') or 'no due date'}\n\n"
+        f"**Due:** {format_due(assignment.get('due_at'))}\n\n"
         f"**Points:** {assignment.get('points_possible', 'n/a')}\n\n"
         f"**Hash:** {content_hash}\n\n"
         f"**Canvas link:** [{assignment.get('name')}]({assignment.get('html_url')})\n\n---\n\n"
