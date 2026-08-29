@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-and-push:
+  build-scripts:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -48,10 +48,49 @@ jobs:
           platforms: linux/amd64
           provenance: false
           sbom: false
-          # Push as Docker V2 manifest (not OCI) so the cluster's registry:2
-          # pull-through cache can re-validate it — registry:2 only sends
-          # Docker V2 Accept headers, and GHCR returns 404 for OCI manifests
-          # when only the Docker V2 Accept header is present.
           outputs: type=image,push=true,oci-mediatypes=false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=scripts
+          cache-to: type=gha,mode=max,scope=scripts
+
+  build-management:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}-management
+          tags: |
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=schedule,pattern={{date 'YYYYMMDD'}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: ./management
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64
+          provenance: false
+          sbom: false
+          outputs: type=image,push=true,oci-mediatypes=false
+          cache-from: type=gha,scope=management
+          cache-to: type=gha,mode=max,scope=management

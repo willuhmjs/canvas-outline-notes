@@ -65,14 +65,14 @@ services:
       - davis
     restart: unless-stopped
 
-  token-updater:
-    image: ghcr.io/willuhmjs/canvas-outline-notes:latest
-    command: ["python3", "/app/token_updater.py"]
+  management:
+    image: ghcr.io/willuhmjs/canvas-outline-notes-management:latest
     environment:
       TOKEN_FILE: /data/token.json
-      PORT: "8080"
+      SETTINGS_FILE: /data/settings.json
+      PORT: "3000"
     ports:
-      - "8080:8080"
+      - "3000:3000"
     volumes:
       - canvas_data:/data
     restart: unless-stopped

@@ -41,16 +41,11 @@ ICS_SEASON_RE = re.compile(r"_(FALL|SPRING|SUMMER|WINTER)_", re.IGNORECASE)
 # if something's still not graded 30+ days after its due date, further polling
 # isn't going to resolve it quickly. Deliberately narrow: keeps the per-run
 # Canvas API footprint tiny and independent of how many assignments are synced.
-COMPLETION_LOOKBACK_DAYS = 30
-COMPLETION_LOOKAHEAD_DAYS = 21
-
-# Canvas has no API for a token to check its own expiration (confirmed by testing:
-# both /api/v1/users/self/tokens and /api/v1/users/<id>/tokens/<id> fail for a
-# non-admin token on this instance -- token introspection is admin-only here).
-# ODU caps personal access tokens at ~90 days, so this is an estimate from whenever
-# the token was last entered, not a real expiry date.
-CANVAS_API_TOKEN_ESTIMATED_LIFETIME_DAYS = 90
-TOKEN_RENEWAL_LEAD_DAYS = 7
+COMPLETION_LOOKBACK_DAYS = int(os.environ.get("COMPLETION_LOOKBACK_DAYS", 30))
+COMPLETION_LOOKAHEAD_DAYS = int(os.environ.get("COMPLETION_LOOKAHEAD_DAYS", 21))
+CANVAS_API_TOKEN_ESTIMATED_LIFETIME_DAYS = int(os.environ.get("TOKEN_LIFETIME_DAYS", 90))
+TOKEN_RENEWAL_LEAD_DAYS = int(os.environ.get("TOKEN_RENEWAL_LEAD_DAYS", 7))
+ALARM_TRIGGER = os.environ.get("ALARM_TRIGGER", "PT6H")
 
 CANVAS_ICS_URL = os.environ["CANVAS_ICS_URL"]
 CANVAS_API_TOKEN = os.environ.get("CANVAS_API_TOKEN", "")
@@ -513,8 +508,8 @@ def build_vtodo(uid, summary, due_date, url, description, status, completed, per
     lines += [
         "BEGIN:VALARM",
         "ACTION:DISPLAY",
-        f"DESCRIPTION:Reminder: {ics_escape(summary)} is due in 6 hours",
-        "TRIGGER;RELATED=END:-PT6H",
+        f"DESCRIPTION:Reminder: {ics_escape(summary)} is due soon",
+        f"TRIGGER;RELATED=END:-{ALARM_TRIGGER}",
         "END:VALARM",
     ]
     lines += ["END:VTODO", "END:VCALENDAR"]

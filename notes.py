@@ -93,7 +93,7 @@ NOTES_FOLDER = "Notes"
 
 # Assignments are sorted into three time-based buckets under each Assignments folder.
 # Current = due within this many days; anything further out is Future.
-CURRENT_WINDOW_DAYS = 14
+CURRENT_WINDOW_DAYS = int(os.environ.get("CURRENT_WINDOW_DAYS", 14))
 BUCKET_PAST = "Past"
 BUCKET_CURRENT = "Current"
 BUCKET_FUTURE = "Future"
