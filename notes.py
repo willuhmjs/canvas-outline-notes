@@ -1086,23 +1086,23 @@ def main():
                                             stats["skipped"] += 1
                                     else:
                                         stats["skipped"] += 1
-                        # No hash (legacy doc) -- still run the submitted check
-                        else:
-                            assignment_id = str(assignment.get("id", ""))
-                            due_at = assignment.get("due_at")
-                            if (due_at and completion_map.get(assignment_id) and
-                                "✓ Submitted" not in existing_text):
-                                try:
-                                    due = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
-                                    days_diff = abs((due.date() - datetime.now(timezone.utc).date()).days)
-                                    if days_diff <= 30:
-                                        course_items.append(("mark_submitted", course_name, target_folder_id, name, existing_id))
-                                    else:
-                                        stats["skipped"] += 1
-                                except Exception:
-                                    stats["skipped"] += 1
                             else:
-                                stats["skipped"] += 1
+                                # No hash (legacy doc) -- still run the submitted check
+                                assignment_id = str(assignment.get("id", ""))
+                                due_at = assignment.get("due_at")
+                                if (due_at and completion_map.get(assignment_id) and
+                                    "✓ Submitted" not in existing_text):
+                                    try:
+                                        due = datetime.fromisoformat(due_at.replace("Z", "+00:00"))
+                                        days_diff = abs((due.date() - datetime.now(timezone.utc).date()).days)
+                                        if days_diff <= 30:
+                                            course_items.append(("mark_submitted", course_name, target_folder_id, name, existing_id))
+                                        else:
+                                            stats["skipped"] += 1
+                                    except Exception:
+                                        stats["skipped"] += 1
+                                else:
+                                    stats["skipped"] += 1
                         except Exception as exc:
                             print(f"WARNING: could not check hash for '{name}': {exc}", file=sys.stderr)
                             stats["skipped"] += 1
