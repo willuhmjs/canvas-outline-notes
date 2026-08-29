@@ -296,11 +296,31 @@ def within_completion_window(due_date):
     return -COMPLETION_LOOKBACK_DAYS <= days_left <= COMPLETION_LOOKAHEAD_DAYS
 
 
+def canvas_api_get(path):
+    url = canvas_api_base() + path
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {CANVAS_API_TOKEN}"})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
+
+
+def has_discussion_post(course_id, topic_id, user_id):
+    """True if the current user has at least one top-level entry in the discussion."""
+    try:
+        entries = canvas_api_get_all(
+            f"/api/v1/courses/{course_id}/discussion_topics/{topic_id}/entries",
+            {"per_page": 100},
+        )
+        return any(str(e.get("user_id")) == str(user_id) for e in entries)
+    except Exception:
+        return False
+
+
 def build_completion_map(pre_fetched_courses=None):
     """{assignment_id: is_done} from Canvas's own submission/grade data -- the
     ICS feed has no completion signal at all, so this is the only way to know.
-    "Done" = submitted, graded (covers assignment types Canvas can't detect an
-    online submission for, e.g. in-person work), or excused.
+
+    "Done" = submitted, graded, excused, OR (for discussion assignments) the
+    user has at least one post on the board even if Canvas hasn't graded it yet.
 
     Best-effort and self-contained: any failure (missing/revoked token, API
     hiccup) just means auto-completion is skipped for this run -- it must
@@ -312,13 +332,20 @@ def build_completion_map(pre_fetched_courses=None):
         completion = {}
         all_courses = pre_fetched_courses or canvas_api_get_all("/api/v1/courses", {"enrollment_state": "active", "per_page": 100})
         courses = current_term_courses(all_courses)
+
+        # Get current user ID once for discussion post checks
+        try:
+            user_id = canvas_api_get("/api/v1/users/self").get("id")
+        except Exception:
+            user_id = None
+
         for course in courses:
             course_id = course.get("id")
             if course_id is None:
                 continue
             assignments = canvas_api_get_all(
                 f"/api/v1/courses/{course_id}/assignments",
-                {"include[]": "submission", "per_page": 100},
+                {"include[]": ["submission", "discussion_topic"], "per_page": 100},
             )
             for a in assignments:
                 submission = a.get("submission") or {}
@@ -327,6 +354,13 @@ def build_completion_map(pre_fetched_courses=None):
                     or submission.get("excused")
                     or submission.get("grade") is not None
                 )
+                # For discussion assignments Canvas often doesn't set submitted_at
+                # until after grading -- check if the user has actually posted instead.
+                if not done and user_id and "discussion_topic" in (a.get("submission_types") or []):
+                    topic = a.get("discussion_topic") or {}
+                    topic_id = topic.get("id")
+                    if topic_id:
+                        done = has_discussion_post(course_id, topic_id, user_id)
                 completion[str(a.get("id"))] = done
         return completion
     except Exception as exc:

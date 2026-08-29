@@ -944,17 +944,19 @@ def main():
 
         # Backfill icons on existing assignment docs that are missing them.
         # Submitted docs get ✅, pending docs get 📝. Runs once per session cheaply.
+        _by_id = {d["id"]: d for d in all_docs}
+        _has_children = {d.get("parentDocumentId") for d in all_docs if d.get("parentDocumentId")}
+        _bucket_names = {BUCKET_CURRENT, BUCKET_FUTURE, BUCKET_PAST}
         for doc in all_docs:
             current_icon = doc.get("icon") or ""
             if current_icon in ("✅", "📝"):
                 continue
-            # Only touch leaf docs (no children) that look like assignment notes
-            has_children = any(d.get("parentDocumentId") == doc["id"] for d in all_docs)
-            if has_children:
+            # Only touch leaf docs (no children)
+            if doc["id"] in _has_children:
                 continue
-            title = doc.get("title", "")
-            # Heuristic: assignment note titles start with a number (e.g. "1 | Discussion")
-            if not (title and title[0].isdigit()):
+            # Only touch docs whose direct parent is a time bucket (Current/Future/Past)
+            parent = _by_id.get(doc.get("parentDocumentId", ""), {})
+            if parent.get("title") not in _bucket_names:
                 continue
             try:
                 doc_info = outline_post("documents.info", {"id": doc["id"]})
