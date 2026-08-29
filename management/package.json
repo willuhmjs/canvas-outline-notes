@@ -2,6 +2,7 @@
   "name": "canvas-management",
   "version": "0.0.1",
   "private": true,
+  "type": "module",
   "scripts": {
     "build": "vite build",
     "dev": "vite dev",
@@ -12,7 +13,7 @@
   "devDependencies": {
     "@sveltejs/adapter-node": "^5.2.9",
     "@sveltejs/kit": "^2.20.5",
-    "@sveltejs/vite-plugin-svelte": "^4.0.4",
+    "@sveltejs/vite-plugin-svelte": "^5.0.0",
     "autoprefixer": "^10.4.20",
     "postcss": "^8.5.3",
     "svelte": "^5.25.12",
