@@ -513,8 +513,8 @@ def build_vtodo(uid, summary, due_date, url, description, status, completed, per
     lines += [
         "BEGIN:VALARM",
         "ACTION:DISPLAY",
-        f"DESCRIPTION:Reminder: {ics_escape(summary)} is due tomorrow",
-        "TRIGGER;RELATED=END:-P1D",
+        f"DESCRIPTION:Reminder: {ics_escape(summary)} is due in 6 hours",
+        "TRIGGER;RELATED=END:-PT6H",
         "END:VALARM",
     ]
     lines += ["END:VTODO", "END:VCALENDAR"]
