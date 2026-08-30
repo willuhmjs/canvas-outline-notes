@@ -25,11 +25,24 @@
 
 	// Poll while a regeneration is running so the progress bar (and a reload
 	// mid-run) reflect the actual on-disk state rather than going stale.
+	let now = $state(Date.now());
 	$effect(() => {
 		if (!regenerateActive) return;
-		const id = setInterval(() => invalidate('triggers:regenerate'), 1200);
+		const id = setInterval(() => {
+			now = Date.now();
+			invalidate('triggers:regenerate');
+		}, 1200);
 		return () => clearInterval(id);
 	});
+
+	// If nothing's updated the progress file in over a minute, the background
+	// task has hung (e.g. a fetch that never resolved) — offer a retry
+	// instead of leaving the progress bar frozen forever.
+	const regenerateStalled = $derived(
+		regenerateActive &&
+			!!data.regenerateProgress.updatedAt &&
+			now - new Date(data.regenerateProgress.updatedAt).getTime() > 60_000
+	);
 
 	function formResult(action: string) {
 		if (!form) return null;
@@ -233,7 +246,29 @@
 			</div>
 		{/if}
 
-		{#if regenerateActive}
+		{#if regenerateActive && regenerateStalled}
+			<div class="rounded-lg bg-red-900/20 border border-red-800 px-4 py-3 space-y-3">
+				<p class="text-sm text-red-400 font-medium">
+					This looks stuck — no progress for over a minute
+					({data.regenerateProgress.deleted}/{data.regenerateProgress.total} deleted). Outline may be overloaded.
+				</p>
+				<form
+					method="POST"
+					action="?/regenerate"
+					use:enhance={() => {
+						regenerateLoading = true;
+						return async ({ update }) => {
+							await update();
+							regenerateLoading = false;
+						};
+					}}
+				>
+					<button type="submit" class="btn-danger" disabled={regenerateLoading}>
+						{regenerateLoading ? 'Retrying…' : 'Retry Regeneration'}
+					</button>
+				</form>
+			</div>
+		{:else if regenerateActive}
 			<div class="rounded-lg bg-amber-900/20 border border-amber-700 px-4 py-3 space-y-2">
 				<p class="text-sm text-amber-300 font-medium">
 					{#if data.regenerateProgress.status === 'listing'}

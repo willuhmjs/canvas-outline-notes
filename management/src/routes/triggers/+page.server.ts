@@ -11,6 +11,30 @@ import {
 } from '$lib/k8s';
 import { readRegenerateProgress, writeRegenerateProgress } from '$lib/regenerate';
 
+// A run is considered stalled if its progress hasn't been updated in this
+// long -- guards against a hung fetch (e.g. AbortSignal.timeout not firing
+// for some in-flight request) leaving the "in progress" state stuck forever
+// with no way to retry.
+const STALE_MS = 60_000;
+
+function isStale(p: { status: string; updatedAt?: string }): boolean {
+	if (!p.updatedAt) return false;
+	return Date.now() - new Date(p.updatedAt).getTime() > STALE_MS;
+}
+
+// Independent of fetch's own AbortSignal -- a plain setTimeout/Promise race
+// that guarantees forward progress even if the underlying request never
+// settles for some undici/Node edge case.
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+		promise.then(
+			(v) => { clearTimeout(timer); resolve(v); },
+			(e) => { clearTimeout(timer); reject(e); }
+		);
+	});
+}
+
 async function wipeOutlineCollection(
 	baseUrl: string,
 	apiToken: string,
@@ -23,13 +47,17 @@ async function wipeOutlineCollection(
 	};
 
 	const post = async (path: string, body: object) => {
-		const r = await fetch(`${baseUrl}/api/${path}`, {
-			method: 'POST',
-			headers,
-			body: JSON.stringify(body),
-			signal: AbortSignal.timeout(15_000)
-		});
-		const text = await r.text();
+		const r = await withTimeout(
+			fetch(`${baseUrl}/api/${path}`, {
+				method: 'POST',
+				headers,
+				body: JSON.stringify(body),
+				signal: AbortSignal.timeout(15_000)
+			}),
+			20_000,
+			`Outline ${path}`
+		);
+		const text = await withTimeout(r.text(), 10_000, `Outline ${path} (reading response)`);
 		if (!r.ok) {
 			throw new Error(`Outline ${path} failed: HTTP ${r.status} — ${text.slice(0, 200)}`);
 		}
@@ -86,16 +114,16 @@ async function runRegenerate(outlineBaseUrl: string, outlineApiToken: string, co
 	let total = 0;
 	let deleted = 0;
 	try {
-		writeRegenerateProgress({ status: 'listing', total, deleted, startedAt });
+		writeRegenerateProgress({ status: 'listing', total, deleted, startedAt, updatedAt: new Date().toISOString() });
 
 		const result = await wipeOutlineCollection(outlineBaseUrl, outlineApiToken, collectionName, (d, t) => {
 			deleted = d;
 			total = t;
-			writeRegenerateProgress({ status: 'deleting', total, deleted, startedAt });
+			writeRegenerateProgress({ status: 'deleting', total, deleted, startedAt, updatedAt: new Date().toISOString() });
 		});
 		deleted = result.deleted;
 
-		writeRegenerateProgress({ status: 'queuing', total, deleted, startedAt });
+		writeRegenerateProgress({ status: 'queuing', total, deleted, startedAt, updatedAt: new Date().toISOString() });
 		const jobResult = await triggerNotes();
 		const jobName = jobResult.mode === 'kubernetes' ? jobResult.jobName : jobResult.record.name;
 
@@ -105,6 +133,7 @@ async function runRegenerate(outlineBaseUrl: string, outlineApiToken: string, co
 			deleted,
 			jobName,
 			startedAt,
+			updatedAt: new Date().toISOString(),
 			finishedAt: new Date().toISOString()
 		});
 	} catch (e) {
@@ -114,6 +143,7 @@ async function runRegenerate(outlineBaseUrl: string, outlineApiToken: string, co
 			deleted,
 			error: String(e),
 			startedAt,
+			updatedAt: new Date().toISOString(),
 			finishedAt: new Date().toISOString()
 		});
 	}
@@ -162,7 +192,9 @@ export const actions: Actions = {
 
 	regenerate: async () => {
 		const current = readRegenerateProgress();
-		if (current.status === 'listing' || current.status === 'deleting' || current.status === 'queuing') {
+		const currentlyActive =
+			current.status === 'listing' || current.status === 'deleting' || current.status === 'queuing';
+		if (currentlyActive && !isStale(current)) {
 			return fail(409, { error: 'A regeneration is already in progress.', action: 'regenerate' });
 		}
 

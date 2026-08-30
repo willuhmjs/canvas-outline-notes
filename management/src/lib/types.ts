@@ -100,5 +100,7 @@ export interface RegenerateProgress {
 	jobName?: string;
 	error?: string;
 	startedAt?: string;
+	/** Bumped on every write while active -- lets the UI/guard detect a hung run. */
+	updatedAt?: string;
 	finishedAt?: string;
 }
