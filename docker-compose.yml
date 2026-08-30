@@ -85,10 +85,19 @@ services:
       # Optional: comma-separated list of groups (from the ID token's `groups`
       # claim) allowed to log in. Leave unset to allow any authenticated user.
       ALLOWED_GROUPS: ${ALLOWED_GROUPS:-}
+      # Required if running behind a reverse proxy (Traefik, nginx, Caddy, etc.) or on
+      # any non-localhost URL: the public URL this app is served at. Without it, SvelteKit
+      # can't validate the Origin header on login form POSTs and rejects them as cross-site.
+      ORIGIN: ${ORIGIN:-http://localhost:3000}
+      # Optional: path to an extra CA cert (PEM) to trust, e.g. if your OIDC provider uses
+      # a self-signed/internal cert. Mount the cert file alongside this. Leave unset for
+      # normal setups — Node's default trust store is used as-is.
+      NODE_EXTRA_CA_CERTS: ${NODE_EXTRA_CA_CERTS:-}
     ports:
       - "3000:3000"
     volumes:
       - canvas_data:/data
+      # - ./extra-ca.pem:/extra-ca.pem:ro  # mount alongside NODE_EXTRA_CA_CERTS=/extra-ca.pem
     restart: unless-stopped
 
 volumes:

@@ -176,6 +176,8 @@ kubectl logs -n dav job/canvas-sync-now
 | `AUTH_OIDC_ID` | OIDC client ID |
 | `AUTH_OIDC_SECRET` | OIDC client secret |
 | `ALLOWED_GROUPS` | Optional comma-separated list of IdP groups allowed to log in. Leave unset to allow any user who can complete the OIDC flow. |
+| `ORIGIN` | Required if served over anything other than `http://localhost:3000` (e.g. behind Traefik/nginx/Caddy, or on a real domain). The app's public URL — without it, SvelteKit rejects login form submissions as cross-site. |
+| `NODE_EXTRA_CA_CERTS` | Optional path to an extra CA cert (PEM) to trust, e.g. if your OIDC provider uses a self-signed/internal cert. Mount the cert file into the container and point this at it. Leave unset for normal setups. |
 
 ---
 
