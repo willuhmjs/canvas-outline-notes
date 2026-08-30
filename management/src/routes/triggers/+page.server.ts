@@ -23,7 +23,15 @@ async function wipeOutlineCollection(baseUrl: string, apiToken: string, collecti
 			body: JSON.stringify(body),
 			signal: AbortSignal.timeout(15_000)
 		});
-		return r.json();
+		const text = await r.text();
+		if (!r.ok) {
+			throw new Error(`Outline ${path} failed: HTTP ${r.status} — ${text.slice(0, 200)}`);
+		}
+		try {
+			return JSON.parse(text);
+		} catch {
+			throw new Error(`Outline ${path} returned a non-JSON response: ${text.slice(0, 200)}`);
+		}
 	};
 
 	// Find collection
@@ -41,10 +49,12 @@ async function wipeOutlineCollection(baseUrl: string, apiToken: string, collecti
 		offset += 100;
 	}
 
-	// Delete all in parallel batches of 10
+	// Delete a few at a time — Outline's Postgres pool is small and deleting in
+	// large parallel batches exhausts it, causing its own health check (and
+	// this request) to fail with a 502 partway through.
 	let deleted = 0;
-	for (let i = 0; i < allDocs.length; i += 10) {
-		const batch = allDocs.slice(i, i + 10);
+	for (let i = 0; i < allDocs.length; i += 3) {
+		const batch = allDocs.slice(i, i + 3);
 		await Promise.all(batch.map(doc =>
 			post('documents.delete', { id: doc.id }).then(() => { deleted++; })
 		));

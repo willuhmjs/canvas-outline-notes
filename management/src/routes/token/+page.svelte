@@ -8,6 +8,12 @@
 
 	let showToken = $state(false);
 
+	function keepValues() {
+		return async ({ update }: { update: (opts?: { reset?: boolean }) => Promise<void> }) => {
+			await update({ reset: false });
+		};
+	}
+
 	function progressPercent(): number {
 		if (!tokenStatus.isSet || tokenStatus.daysElapsed === null) return 0;
 		return Math.min(100, Math.max(0, (tokenStatus.daysElapsed / tokenStatus.daysTotal) * 100));
@@ -216,7 +222,7 @@
 			</div>
 		{/if}
 
-		<form method="POST" action="?/save" use:enhance class="space-y-4">
+		<form method="POST" action="?/save" use:enhance={keepValues} class="space-y-4">
 			<div>
 				<label class="form-label" for="token">Access Token</label>
 				<div class="relative">

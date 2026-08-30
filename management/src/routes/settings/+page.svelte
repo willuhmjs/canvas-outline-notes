@@ -46,6 +46,14 @@
 	let visionModelSelect = $state(models.includes(_initVisionModel) ? _initVisionModel : 'custom');
 	let visionModelCustom = $state(_initVisionModel);
 
+	// Keep whatever the user typed after a save — don't let SvelteKit's
+	// default post-submit form.reset() wipe fields back to their mounted values.
+	function keepValues() {
+		return async ({ update }: { update: (opts?: { reset?: boolean }) => Promise<void> }) => {
+			await update({ reset: false });
+		};
+	}
+
 	function handleAiSubmit({ action }: { action: URL }) {
 		if (action.search === '?/aiListModels') {
 			fetchingModels = true;
@@ -63,8 +71,8 @@
 				// unsaved edits to other fields in the form.
 			};
 		}
-		return async ({ update }: { update: () => Promise<void> }) => {
-			await update();
+		return async ({ update }: { update: (opts?: { reset?: boolean }) => Promise<void> }) => {
+			await update({ reset: false });
 		};
 	}
 
@@ -105,7 +113,7 @@
 			</div>
 		</div>
 
-		<form method="POST" action="?/canvas" use:enhance class="space-y-4">
+		<form method="POST" action="?/canvas" use:enhance={keepValues} class="space-y-4">
 			<div>
 				<label class="form-label" for="CANVAS_ICS_URL">
 					ICS Feed URL
@@ -183,7 +191,7 @@
 			<p class="text-xs text-slate-400 mt-0.5">Davis server connection for task storage</p>
 		</div>
 
-		<form method="POST" action="?/caldav" use:enhance class="space-y-4">
+		<form method="POST" action="?/caldav" use:enhance={keepValues} class="space-y-4">
 			<div>
 				<label class="form-label" for="DAV_BASE_URL">CalDAV Base URL</label>
 				<input
@@ -296,7 +304,7 @@
 			<p class="text-xs text-slate-400 mt-0.5">Wiki where AI study notes are saved</p>
 		</div>
 
-		<form method="POST" action="?/outline" use:enhance class="space-y-4">
+		<form method="POST" action="?/outline" use:enhance={keepValues} class="space-y-4">
 			<div>
 				<label class="form-label" for="OUTLINE_BASE_URL">Outline Base URL</label>
 				<input
@@ -633,7 +641,7 @@
 			</p>
 		</div>
 
-		<form method="POST" action="?/schedule" use:enhance class="space-y-4">
+		<form method="POST" action="?/schedule" use:enhance={keepValues} class="space-y-4">
 			<div class="grid grid-cols-2 gap-4">
 				<div>
 					<label class="form-label" for="SYNC_INTERVAL_MINUTES">
