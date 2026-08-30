@@ -1,10 +1,19 @@
 import { fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
-import { getAllSettings, saveSettings } from '$lib/k8s';
+import { getAllSettings, saveSettings, listChatModels } from '$lib/k8s';
 
 export const load: PageServerLoad = async () => {
 	const { syncSecrets, outlineSecrets, config } = await getAllSettings();
-	return { syncSecrets, outlineSecrets, config };
+
+	let models: string[] = [];
+	let modelsError: string | null = null;
+	if (config.CHAT_API_BASE_URL && outlineSecrets.CHAT_API_KEY) {
+		const result = await listChatModels(config.CHAT_API_BASE_URL, outlineSecrets.CHAT_API_KEY);
+		if ('error' in result) modelsError = result.error;
+		else models = result.models;
+	}
+
+	return { syncSecrets, outlineSecrets, config, models, modelsError };
 };
 
 function str(fd: FormData, key: string): string {
@@ -116,6 +125,23 @@ export const actions: Actions = {
 		} catch (e) {
 			return fail(500, { error: String(e), section: 'ai' });
 		}
+	},
+
+	aiListModels: async ({ request }) => {
+		const fd = await request.formData();
+		const baseUrl = str(fd, 'CHAT_API_BASE_URL');
+		let apiKey = str(fd, 'CHAT_API_KEY');
+		if (!apiKey) {
+			// Blank key field means "keep existing" — fall back to the stored one.
+			const { outlineSecrets } = await getAllSettings();
+			apiKey = outlineSecrets.CHAT_API_KEY ?? '';
+		}
+
+		const result = await listChatModels(baseUrl, apiKey);
+		if ('error' in result) {
+			return fail(502, { error: result.error, section: 'ai_models' });
+		}
+		return { success: true, section: 'ai_models', models: result.models };
 	},
 
 	schedule: async ({ request }) => {

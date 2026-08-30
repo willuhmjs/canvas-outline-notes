@@ -633,6 +633,41 @@ export async function checkOutlineHealth(
 	return { name: 'Outline', status: 'error', message: `HTTP ${status}`, latencyMs };
 }
 
+/**
+ * Query an OpenAI-compatible `/models` endpoint so the UI can offer a
+ * dropdown instead of requiring the exact model id to be typed by hand.
+ */
+export async function listChatModels(
+	baseUrl: string,
+	apiKey: string
+): Promise<{ models: string[] } | { error: string }> {
+	if (!baseUrl || !apiKey) {
+		return { error: 'API Base URL and API Key are required' };
+	}
+	const { ok, status, text } = await timedFetch(() =>
+		fetch(`${baseUrl.replace(/\/+$/, '')}/models`, {
+			headers: { Authorization: `Bearer ${apiKey}` },
+			signal: AbortSignal.timeout(8000)
+		})
+	);
+	if (!ok) {
+		if (status === 401) return { error: 'Invalid API key (401)' };
+		if (status === 0) return { error: `Unreachable: ${text.slice(0, 120)}` };
+		return { error: `HTTP ${status}` };
+	}
+	try {
+		const parsed = JSON.parse(text);
+		const list = Array.isArray(parsed?.data) ? parsed.data : Array.isArray(parsed) ? parsed : [];
+		const models = list
+			.map((m: unknown) => (typeof m === 'string' ? m : (m as { id?: string })?.id))
+			.filter((id: unknown): id is string => typeof id === 'string')
+			.sort();
+		return { models };
+	} catch {
+		return { error: 'Invalid response from models endpoint' };
+	}
+}
+
 // ── CalDAV alarm management ───────────────────────────────────────────────────
 
 /**

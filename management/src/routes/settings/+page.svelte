@@ -33,6 +33,41 @@
 	let alarmPreset = $state(_isKnownPreset ? _initAlarm : 'custom');
 	let alarmCustom = $state(_isKnownPreset ? 'PT6H' : _initAlarm);
 
+	// Chat models, queried from the configured OpenAI-compatible endpoint
+	let models = $state(data.models ?? []);
+	let modelsError = $state(data.modelsError ?? null);
+	let fetchingModels = $state(false);
+
+	const _initTextModel = data.config.CHAT_MODEL_TEXT ?? 'gpt-oss-120b';
+	let textModelSelect = $state(models.includes(_initTextModel) ? _initTextModel : 'custom');
+	let textModelCustom = $state(_initTextModel);
+
+	const _initVisionModel = data.config.CHAT_MODEL_VISION ?? 'gemma-4-31b';
+	let visionModelSelect = $state(models.includes(_initVisionModel) ? _initVisionModel : 'custom');
+	let visionModelCustom = $state(_initVisionModel);
+
+	function handleAiSubmit({ action }: { action: URL }) {
+		if (action.search === '?/aiListModels') {
+			fetchingModels = true;
+			return async ({ result }: { result: { type: string; data?: Record<string, unknown> } }) => {
+				fetchingModels = false;
+				if (result.type === 'success' && result.data) {
+					models = (result.data.models as string[]) ?? [];
+					modelsError = null;
+					if (models.includes(textModelCustom)) textModelSelect = textModelCustom;
+					if (models.includes(visionModelCustom)) visionModelSelect = visionModelCustom;
+				} else if (result.type === 'failure' && result.data) {
+					modelsError = String(result.data.error ?? 'Failed to fetch models');
+				}
+				// Intentionally skip update()/invalidateAll — this must not reset
+				// unsaved edits to other fields in the form.
+			};
+		}
+		return async ({ update }: { update: () => Promise<void> }) => {
+			await update();
+		};
+	}
+
 	function sectionResult(section: string) {
 		if (!form) return null;
 		const f = form as Record<string, unknown>;
@@ -349,7 +384,7 @@
 			<p class="text-xs text-slate-400 mt-0.5">Language model used to generate study notes</p>
 		</div>
 
-		<form method="POST" action="?/ai" use:enhance class="space-y-4">
+		<form method="POST" action="?/ai" use:enhance={handleAiSubmit} class="space-y-4">
 			<div>
 				<label class="form-label" for="CHAT_API_BASE_URL">API Base URL</label>
 				<input
@@ -384,29 +419,73 @@
 				</div>
 			</div>
 
+			<div>
+				<button
+					type="submit"
+					formaction="?/aiListModels"
+					class="btn-secondary text-sm"
+					disabled={fetchingModels}
+				>
+					{fetchingModels ? 'Fetching models…' : 'Fetch available models'}
+				</button>
+				<p class="text-xs text-slate-500 mt-1">
+					Queries <code class="text-slate-400">/models</code> on the API Base URL above using the
+					API Key above (or the saved key, if left blank) to populate the dropdowns below.
+				</p>
+				{#if modelsError}
+					<p class="text-sm text-red-400 mt-1">{modelsError}</p>
+				{/if}
+			</div>
+
 			<div class="grid grid-cols-2 gap-4">
 				<div>
-					<label class="form-label" for="CHAT_MODEL_TEXT">Text Model</label>
-					<input
-						id="CHAT_MODEL_TEXT"
-						name="CHAT_MODEL_TEXT"
-						type="text"
+					<label class="form-label" for="CHAT_MODEL_TEXT_select">Text Model</label>
+					<select
+						id="CHAT_MODEL_TEXT_select"
 						class="form-input"
-						value={data.config.CHAT_MODEL_TEXT ?? 'gpt-oss-120b'}
-						placeholder="gpt-oss-120b"
-					/>
+						bind:value={textModelSelect}
+					>
+						{#each models as m}
+							<option value={m}>{m}</option>
+						{/each}
+						<option value="custom">Custom…</option>
+					</select>
+					{#if textModelSelect === 'custom'}
+						<input
+							name="CHAT_MODEL_TEXT"
+							type="text"
+							class="form-input mt-2"
+							bind:value={textModelCustom}
+							placeholder="gpt-oss-120b"
+						/>
+					{:else}
+						<input type="hidden" name="CHAT_MODEL_TEXT" value={textModelSelect} />
+					{/if}
 					<p class="text-xs text-slate-500 mt-1">For text-based assignments.</p>
 				</div>
 				<div>
-					<label class="form-label" for="CHAT_MODEL_VISION">Vision Model</label>
-					<input
-						id="CHAT_MODEL_VISION"
-						name="CHAT_MODEL_VISION"
-						type="text"
+					<label class="form-label" for="CHAT_MODEL_VISION_select">Vision Model</label>
+					<select
+						id="CHAT_MODEL_VISION_select"
 						class="form-input"
-						value={data.config.CHAT_MODEL_VISION ?? 'gemma-4-31b'}
-						placeholder="gemma-4-31b"
-					/>
+						bind:value={visionModelSelect}
+					>
+						{#each models as m}
+							<option value={m}>{m}</option>
+						{/each}
+						<option value="custom">Custom…</option>
+					</select>
+					{#if visionModelSelect === 'custom'}
+						<input
+							name="CHAT_MODEL_VISION"
+							type="text"
+							class="form-input mt-2"
+							bind:value={visionModelCustom}
+							placeholder="gemma-4-31b"
+						/>
+					{:else}
+						<input type="hidden" name="CHAT_MODEL_VISION" value={visionModelSelect} />
+					{/if}
 					<p class="text-xs text-slate-500 mt-1">For PDF / image attachments.</p>
 				</div>
 			</div>
