@@ -149,6 +149,27 @@ async function runRegenerate(outlineBaseUrl: string, outlineApiToken: string, co
 	}
 }
 
+/**
+ * If the last run stalled (no progress in over a minute -- e.g. a hung
+ * fetch that never resolved), restart it automatically instead of leaving
+ * the UI's progress bar frozen waiting on manual intervention.
+ */
+async function autoHealRegenerate(): Promise<import('$lib/types').RegenerateProgress> {
+	const current = readRegenerateProgress();
+	const active =
+		current.status === 'listing' || current.status === 'deleting' || current.status === 'queuing';
+	if (!active || !isStale(current)) return current;
+
+	const { outlineSecrets, config } = await getAllSettings();
+	const outlineBaseUrl = config.OUTLINE_BASE_URL ?? '';
+	const outlineApiToken = outlineSecrets.OUTLINE_API_TOKEN ?? '';
+	const collectionName = config.OUTLINE_COLLECTION_NAME ?? 'Automatic Notes';
+	if (!outlineBaseUrl || !outlineApiToken) return current;
+
+	void runRegenerate(outlineBaseUrl, outlineApiToken, collectionName);
+	return readRegenerateProgress();
+}
+
 export const load: PageServerLoad = async ({ depends }) => {
 	depends('triggers:regenerate');
 
@@ -165,7 +186,7 @@ export const load: PageServerLoad = async ({ depends }) => {
 	return {
 		recentJobs: recentJobs.slice(0, 10),
 		dockerHistory,
-		regenerateProgress: readRegenerateProgress()
+		regenerateProgress: await autoHealRegenerate()
 	};
 };
 
