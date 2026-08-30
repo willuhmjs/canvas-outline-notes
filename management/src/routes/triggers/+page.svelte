@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { invalidate } from '$app/navigation';
 	import type { PageData, ActionData } from './$types';
 	import type { DockerJobRecord } from '$lib/types';
 
@@ -10,6 +11,25 @@
 	let alarmLoading = $state(false);
 	let regenerateLoading = $state(false);
 	let regenerateConfirm = $state(false);
+
+	const regenerateActive = $derived(
+		data.regenerateProgress.status === 'listing' ||
+			data.regenerateProgress.status === 'deleting' ||
+			data.regenerateProgress.status === 'queuing'
+	);
+	const regeneratePercent = $derived(
+		data.regenerateProgress.total > 0
+			? Math.round((data.regenerateProgress.deleted / data.regenerateProgress.total) * 100)
+			: 0
+	);
+
+	// Poll while a regeneration is running so the progress bar (and a reload
+	// mid-run) reflect the actual on-disk state rather than going stale.
+	$effect(() => {
+		if (!regenerateActive) return;
+		const id = setInterval(() => invalidate('triggers:regenerate'), 1200);
+		return () => clearInterval(id);
+	});
 
 	function formResult(action: string) {
 		if (!form) return null;
@@ -196,12 +216,16 @@
 			</div>
 		</div>
 
-		{#if formResult('regenerate')?.success}
+		{#if data.regenerateProgress.status === 'done'}
 			<div class="rounded-lg bg-green-900/20 border border-green-800 px-3 py-2 space-y-0.5">
 				<p class="text-sm text-green-400">
-					Deleted {(formResult('regenerate') as { deleted?: number })?.deleted ?? 0} documents.
-					Notes job <code class="text-green-300">{(formResult('regenerate') as { jobName?: string })?.jobName}</code> queued — regeneration will complete over the next few hourly runs.
+					Deleted {data.regenerateProgress.deleted} documents.
+					Notes job <code class="text-green-300">{data.regenerateProgress.jobName}</code> queued — regeneration will complete over the next few hourly runs.
 				</p>
+			</div>
+		{:else if data.regenerateProgress.status === 'error'}
+			<div class="rounded-lg bg-red-900/20 border border-red-800 px-3 py-2">
+				<p class="text-sm text-red-400">{data.regenerateProgress.error}</p>
 			</div>
 		{:else if formResult('regenerate')?.error}
 			<div class="rounded-lg bg-red-900/20 border border-red-800 px-3 py-2">
@@ -209,7 +233,29 @@
 			</div>
 		{/if}
 
-		{#if !regenerateConfirm}
+		{#if regenerateActive}
+			<div class="rounded-lg bg-amber-900/20 border border-amber-700 px-4 py-3 space-y-2">
+				<p class="text-sm text-amber-300 font-medium">
+					{#if data.regenerateProgress.status === 'listing'}
+						Listing documents…
+					{:else if data.regenerateProgress.status === 'deleting'}
+						Deleting documents… ({data.regenerateProgress.deleted}/{data.regenerateProgress.total})
+					{:else}
+						Queuing regeneration job…
+					{/if}
+				</p>
+				<div class="h-2 rounded-full bg-slate-700 overflow-hidden">
+					{#if data.regenerateProgress.status === 'deleting'}
+						<div
+							class="h-full rounded-full bg-amber-500 transition-all"
+							style="width: {regeneratePercent}%"
+						></div>
+					{:else}
+						<div class="h-full w-full bg-amber-500/40 animate-pulse"></div>
+					{/if}
+				</div>
+			</div>
+		{:else if !regenerateConfirm}
 			<button
 				type="button"
 				class="btn-secondary border-amber-700/60 text-amber-400 hover:bg-amber-900/20"
@@ -220,7 +266,7 @@
 		{:else}
 			<div class="rounded-lg bg-amber-900/20 border border-amber-700 px-4 py-3 space-y-3">
 				<p class="text-sm text-amber-300 font-medium">
-					This will delete all {(formResult('regenerate') as { deleted?: number })?.deleted !== undefined ? '' : '~200+'} Outline documents and regenerate from scratch. Continue?
+					This will delete all ~200+ Outline documents and regenerate from scratch. Continue?
 				</p>
 				<div class="flex gap-3">
 					<form
@@ -241,7 +287,7 @@
 									<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
 									<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
 								</svg>
-								Deleting & queuing…
+								Starting…
 							{:else}
 								Yes, regenerate everything
 							{/if}

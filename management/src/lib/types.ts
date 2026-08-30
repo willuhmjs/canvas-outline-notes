@@ -92,3 +92,13 @@ export interface DockerSettings {
 }
 
 export type Mode = 'kubernetes' | 'docker';
+
+export interface RegenerateProgress {
+	status: 'idle' | 'listing' | 'deleting' | 'queuing' | 'done' | 'error';
+	total: number;
+	deleted: number;
+	jobName?: string;
+	error?: string;
+	startedAt?: string;
+	finishedAt?: string;
+}

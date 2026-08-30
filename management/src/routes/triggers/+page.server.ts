@@ -9,8 +9,14 @@ import {
 	clearCredentialAlarm,
 	readDockerSettings
 } from '$lib/k8s';
+import { readRegenerateProgress, writeRegenerateProgress } from '$lib/regenerate';
 
-async function wipeOutlineCollection(baseUrl: string, apiToken: string, collectionName: string): Promise<{ deleted: number }> {
+async function wipeOutlineCollection(
+	baseUrl: string,
+	apiToken: string,
+	collectionName: string,
+	onProgress: (deleted: number, total: number) => void
+): Promise<{ deleted: number }> {
 	const headers = {
 		Authorization: `Bearer ${apiToken}`,
 		'Content-Type': 'application/json'
@@ -49,6 +55,8 @@ async function wipeOutlineCollection(baseUrl: string, apiToken: string, collecti
 		offset += 100;
 	}
 
+	onProgress(0, allDocs.length);
+
 	// Delete a few at a time — Outline's Postgres pool is small and deleting in
 	// large parallel batches exhausts it, causing its own health check (and
 	// this request) to fail with a 502 partway through.
@@ -56,14 +64,64 @@ async function wipeOutlineCollection(baseUrl: string, apiToken: string, collecti
 	for (let i = 0; i < allDocs.length; i += 3) {
 		const batch = allDocs.slice(i, i + 3);
 		await Promise.all(batch.map(doc =>
-			post('documents.delete', { id: doc.id }).then(() => { deleted++; })
+			post('documents.delete', { id: doc.id }).then(() => {
+				deleted++;
+				onProgress(deleted, allDocs.length);
+			})
 		));
 	}
 
 	return { deleted };
 }
 
-export const load: PageServerLoad = async () => {
+/**
+ * Runs in the background, outside the request/response cycle — deleting
+ * ~200 documents plus queuing a notes job can take well over a minute,
+ * which upstream proxies were killing with a 502 while the form action
+ * waited on it. Progress is persisted to disk so the UI can poll it and
+ * survive a page reload.
+ */
+async function runRegenerate(outlineBaseUrl: string, outlineApiToken: string, collectionName: string) {
+	const startedAt = new Date().toISOString();
+	let total = 0;
+	let deleted = 0;
+	try {
+		writeRegenerateProgress({ status: 'listing', total, deleted, startedAt });
+
+		const result = await wipeOutlineCollection(outlineBaseUrl, outlineApiToken, collectionName, (d, t) => {
+			deleted = d;
+			total = t;
+			writeRegenerateProgress({ status: 'deleting', total, deleted, startedAt });
+		});
+		deleted = result.deleted;
+
+		writeRegenerateProgress({ status: 'queuing', total, deleted, startedAt });
+		const jobResult = await triggerNotes();
+		const jobName = jobResult.mode === 'kubernetes' ? jobResult.jobName : jobResult.record.name;
+
+		writeRegenerateProgress({
+			status: 'done',
+			total,
+			deleted,
+			jobName,
+			startedAt,
+			finishedAt: new Date().toISOString()
+		});
+	} catch (e) {
+		writeRegenerateProgress({
+			status: 'error',
+			total,
+			deleted,
+			error: String(e),
+			startedAt,
+			finishedAt: new Date().toISOString()
+		});
+	}
+}
+
+export const load: PageServerLoad = async ({ depends }) => {
+	depends('triggers:regenerate');
+
 	let recentJobs: Awaited<ReturnType<typeof listManualJobs>> = [];
 	let dockerHistory: import('$lib/types').DockerJobRecord[] = [];
 
@@ -76,7 +134,8 @@ export const load: PageServerLoad = async () => {
 
 	return {
 		recentJobs: recentJobs.slice(0, 10),
-		dockerHistory
+		dockerHistory,
+		regenerateProgress: readRegenerateProgress()
 	};
 };
 
@@ -102,29 +161,29 @@ export const actions: Actions = {
 	},
 
 	regenerate: async () => {
-		try {
-			const { outlineSecrets, config } = await getAllSettings();
-			const outlineBaseUrl = config.OUTLINE_BASE_URL ?? '';
-			const outlineApiToken = outlineSecrets.OUTLINE_API_TOKEN ?? '';
-			const collectionName = config.OUTLINE_COLLECTION_NAME ?? 'Automatic Notes';
-
-			if (!outlineBaseUrl || !outlineApiToken) {
-				return fail(400, {
-					error: 'Outline is not configured. Set the base URL and API token in Settings first.',
-					action: 'regenerate'
-				});
-			}
-
-			const { deleted } = await wipeOutlineCollection(outlineBaseUrl, outlineApiToken, collectionName);
-
-			// Fire off a notes job to regenerate everything
-			const result = await triggerNotes();
-			const jobName = result.mode === 'kubernetes' ? result.jobName : result.record.name;
-
-			return { success: true, action: 'regenerate', deleted, jobName };
-		} catch (e) {
-			return fail(500, { error: String(e), action: 'regenerate' });
+		const current = readRegenerateProgress();
+		if (current.status === 'listing' || current.status === 'deleting' || current.status === 'queuing') {
+			return fail(409, { error: 'A regeneration is already in progress.', action: 'regenerate' });
 		}
+
+		const { outlineSecrets, config } = await getAllSettings();
+		const outlineBaseUrl = config.OUTLINE_BASE_URL ?? '';
+		const outlineApiToken = outlineSecrets.OUTLINE_API_TOKEN ?? '';
+		const collectionName = config.OUTLINE_COLLECTION_NAME ?? 'Automatic Notes';
+
+		if (!outlineBaseUrl || !outlineApiToken) {
+			return fail(400, {
+				error: 'Outline is not configured. Set the base URL and API token in Settings first.',
+				action: 'regenerate'
+			});
+		}
+
+		// Don't await — this can take well over a minute and must not block
+		// the HTTP response (long-running requests were getting killed by
+		// upstream proxies with a "Bad Gateway"). Progress is polled from disk.
+		void runRegenerate(outlineBaseUrl, outlineApiToken, collectionName);
+
+		return { success: true, action: 'regenerate', started: true };
 	},
 
 	clearAlarm: async () => {
