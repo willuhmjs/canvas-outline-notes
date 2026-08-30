@@ -18,7 +18,10 @@ import { readRegenerateProgress, writeRegenerateProgress } from '$lib/regenerate
 const STALE_MS = 60_000;
 
 function isStale(p: { status: string; updatedAt?: string }): boolean {
-	if (!p.updatedAt) return false;
+	// No liveness timestamp at all (e.g. a run started before this field
+	// existed) is itself a sign of a stuck run -- treat it as stale rather
+	// than getting stuck forever waiting for an update that will never come.
+	if (!p.updatedAt) return true;
 	return Date.now() - new Date(p.updatedAt).getTime() > STALE_MS;
 }
 
