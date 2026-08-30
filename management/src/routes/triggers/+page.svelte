@@ -8,6 +8,8 @@
 	let syncLoading = $state(false);
 	let notesLoading = $state(false);
 	let alarmLoading = $state(false);
+	let regenerateLoading = $state(false);
+	let regenerateConfirm = $state(false);
 
 	function formResult(action: string) {
 		if (!form) return null;
@@ -175,6 +177,82 @@
 				</button>
 			</form>
 		</div>
+	</div>
+
+	<!-- Regenerate All Notes -->
+	<div class="card space-y-4 border-amber-800/40">
+		<div class="flex items-center gap-3">
+			<div class="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-600/20 border border-amber-800">
+				<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-5 h-5 text-amber-400">
+					<path fill-rule="evenodd" d="M15.312 11.424a5.5 5.5 0 0 1-9.201 2.466l-.312-.311h2.433a.75.75 0 0 0 0-1.5H3.989a.75.75 0 0 0-.75.75v4.242a.75.75 0 0 0 1.5 0v-2.43l.31.31a7 7 0 0 0 11.712-3.138.75.75 0 0 0-1.449-.39Zm1.23-3.723a.75.75 0 0 0 .219-.53V2.929a.75.75 0 0 0-1.5 0V5.36l-.31-.31A7 7 0 0 0 3.239 8.188a.75.75 0 1 0 1.448.389A5.5 5.5 0 0 1 13.89 6.11l.311.31h-2.432a.75.75 0 0 0 0 1.5h4.243a.75.75 0 0 0 .53-.219Z" clip-rule="evenodd" />
+				</svg>
+			</div>
+			<div>
+				<h2 class="text-sm font-semibold text-slate-200">Regenerate All Notes</h2>
+				<p class="text-xs text-slate-400">
+					Deletes all documents in the <strong class="text-slate-300">Automatic Notes</strong> Outline collection,
+					then queues a full regeneration. Use this when switching LLMs or resetting after prompt changes.
+				</p>
+			</div>
+		</div>
+
+		{#if formResult('regenerate')?.success}
+			<div class="rounded-lg bg-green-900/20 border border-green-800 px-3 py-2 space-y-0.5">
+				<p class="text-sm text-green-400">
+					Deleted {(formResult('regenerate') as { deleted?: number })?.deleted ?? 0} documents.
+					Notes job <code class="text-green-300">{(formResult('regenerate') as { jobName?: string })?.jobName}</code> queued — regeneration will complete over the next few hourly runs.
+				</p>
+			</div>
+		{:else if formResult('regenerate')?.error}
+			<div class="rounded-lg bg-red-900/20 border border-red-800 px-3 py-2">
+				<p class="text-sm text-red-400">{formResult('regenerate')?.error as string}</p>
+			</div>
+		{/if}
+
+		{#if !regenerateConfirm}
+			<button
+				type="button"
+				class="btn-secondary border-amber-700/60 text-amber-400 hover:bg-amber-900/20"
+				onclick={() => regenerateConfirm = true}
+			>
+				Regenerate All Notes…
+			</button>
+		{:else}
+			<div class="rounded-lg bg-amber-900/20 border border-amber-700 px-4 py-3 space-y-3">
+				<p class="text-sm text-amber-300 font-medium">
+					This will delete all {(formResult('regenerate') as { deleted?: number })?.deleted !== undefined ? '' : '~200+'} Outline documents and regenerate from scratch. Continue?
+				</p>
+				<div class="flex gap-3">
+					<form
+						method="POST"
+						action="?/regenerate"
+						use:enhance={() => {
+							regenerateLoading = true;
+							regenerateConfirm = false;
+							return async ({ update }) => {
+								await update();
+								regenerateLoading = false;
+							};
+						}}
+					>
+						<button type="submit" class="btn-danger" disabled={regenerateLoading}>
+							{#if regenerateLoading}
+								<svg class="animate-spin w-4 h-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+									<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+									<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+								</svg>
+								Deleting & queuing…
+							{:else}
+								Yes, regenerate everything
+							{/if}
+						</button>
+					</form>
+					<button type="button" class="btn-secondary" onclick={() => regenerateConfirm = false}>
+						Cancel
+					</button>
+				</div>
+			</div>
+		{/if}
 	</div>
 
 	<!-- Clear Credential Alarm -->
