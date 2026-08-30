@@ -46,14 +46,17 @@ try:
 except ImportError:
     _YT_AVAILABLE = False
 
-# The cluster's Traefik proxy intercepts all outbound HTTPS with a self-signed cert.
-# Install a global no-verify opener so every urlopen call goes through without failing.
-_ssl_ctx = ssl.create_default_context()
-_ssl_ctx.check_hostname = False
-_ssl_ctx.verify_mode = ssl.CERT_NONE
-urllib.request.install_opener(
-    urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ssl_ctx))
-)
+# To trust a self-signed proxy/CA (e.g. a MITM-inspecting reverse proxy in front
+# of Canvas/Outline/the LLM API), set EXTRA_CA_CERT_FILE to a mounted PEM file.
+# Verification stays fully enabled; the CA is added on top of the system trust
+# store. Left unset, requests use standard verified HTTPS with no changes.
+_extra_ca_file = os.environ.get("EXTRA_CA_CERT_FILE")
+if _extra_ca_file:
+    _ssl_ctx = ssl.create_default_context()
+    _ssl_ctx.load_verify_locations(cafile=_extra_ca_file)
+    urllib.request.install_opener(
+        urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ssl_ctx))
+    )
 
 DISPLAY_TZ = zoneinfo.ZoneInfo(os.environ.get("TZ", "America/New_York"))
 
@@ -72,7 +75,7 @@ def format_due(iso_str):
 CANVAS_BASE_URL = os.environ.get("CANVAS_BASE_URL", "https://canvas.odu.edu").rstrip("/")
 CANVAS_API_TOKEN = os.environ.get("CANVAS_API_TOKEN", "")
 
-# Fall back to token file written by token_updater (Docker / bare-metal mode)
+# Fall back to token file written by the management app (Docker / bare-metal mode)
 if not CANVAS_API_TOKEN:
     _token_file = os.environ.get("TOKEN_FILE", "/data/token.json")
     try:

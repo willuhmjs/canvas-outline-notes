@@ -1,6 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { page } from '$app/state';
+	import { signOut } from '@auth/sveltekit/client';
 	import type { LayoutData } from './$types';
 
 	let { data, children }: { data: LayoutData; children: import('svelte').Snippet } = $props();
@@ -98,7 +99,14 @@
 					<div class="flex h-6 w-6 items-center justify-center rounded-full bg-slate-600 text-xs font-medium text-slate-200 flex-shrink-0">
 						{data.username.slice(0, 1).toUpperCase()}
 					</div>
-					<span class="text-xs text-slate-400 truncate">{data.username}</span>
+					<span class="text-xs text-slate-400 truncate flex-1">{data.username}</span>
+					<button
+						type="button"
+						onclick={() => signOut()}
+						class="text-xs text-slate-500 hover:text-slate-300 flex-shrink-0"
+					>
+						Sign out
+					</button>
 				</div>
 			{/if}
 		</div>

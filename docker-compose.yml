@@ -59,8 +59,13 @@ services:
       # State + token file (shared volume)
       STATE_FILE: /data/state.json
       TOKEN_FILE: /data/token.json
+      # Optional: trust an extra CA (e.g. a self-signed intercepting proxy)
+      # without disabling verification for everything else. Leave unset for
+      # normal deployments — see README for details.
+      EXTRA_CA_CERT_FILE: ${EXTRA_CA_CERT_FILE:-}
     volumes:
       - canvas_data:/data
+      # - ./extra-ca.pem:/extra-ca.pem:ro  # mount alongside EXTRA_CA_CERT_FILE=/extra-ca.pem
     depends_on:
       - davis
     restart: unless-stopped
@@ -71,6 +76,15 @@ services:
       TOKEN_FILE: /data/token.json
       SETTINGS_FILE: /data/settings.json
       PORT: "3000"
+      # OIDC login (required) — register this app with your identity provider
+      # using redirect URI https://<host>/auth/callback/oidc
+      AUTH_SECRET: ${AUTH_SECRET}
+      AUTH_OIDC_ISSUER: ${AUTH_OIDC_ISSUER}
+      AUTH_OIDC_ID: ${AUTH_OIDC_ID}
+      AUTH_OIDC_SECRET: ${AUTH_OIDC_SECRET}
+      # Optional: comma-separated list of groups (from the ID token's `groups`
+      # claim) allowed to log in. Leave unset to allow any authenticated user.
+      ALLOWED_GROUPS: ${ALLOWED_GROUPS:-}
     ports:
       - "3000:3000"
     volumes:

@@ -22,12 +22,25 @@ import base64
 import json
 import os
 import re
+import ssl
 import sys
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlencode, urljoin, urlsplit
+
+# To trust a self-signed proxy/CA (e.g. a MITM-inspecting reverse proxy in front
+# of Canvas), set EXTRA_CA_CERT_FILE to a mounted PEM file. Verification stays
+# fully enabled; the CA is added on top of the system trust store. Left unset,
+# requests use standard verified HTTPS with no changes.
+_extra_ca_file = os.environ.get("EXTRA_CA_CERT_FILE")
+if _extra_ca_file:
+    _ssl_ctx = ssl.create_default_context()
+    _ssl_ctx.load_verify_locations(cafile=_extra_ca_file)
+    urllib.request.install_opener(
+        urllib.request.build_opener(urllib.request.HTTPSHandler(context=_ssl_ctx))
+    )
 
 COURSE_CODE_RE = re.compile(r"^(.*)\s\[([^\[\]]+)\]$")
 PLAIN_ASSIGNMENT_UID_RE = re.compile(r"^event-assignment-(\d+)$")
@@ -51,7 +64,7 @@ CANVAS_ICS_URL = os.environ["CANVAS_ICS_URL"]
 CANVAS_API_TOKEN = os.environ.get("CANVAS_API_TOKEN", "")
 CANVAS_API_TOKEN_ISSUED_AT = os.environ.get("CANVAS_API_TOKEN_ISSUED_AT", "")
 
-# Fall back to token file written by token_updater (Docker / bare-metal mode)
+# Fall back to token file written by the management app (Docker / bare-metal mode)
 if not CANVAS_API_TOKEN:
     _token_file = os.environ.get("TOKEN_FILE", "/data/token.json")
     try:

@@ -10,6 +10,9 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
   },
+  "dependencies": {
+    "@auth/sveltekit": "^1.11.3"
+  },
   "devDependencies": {
     "@sveltejs/adapter-node": "^5.2.9",
     "@sveltejs/kit": "^2.20.5",

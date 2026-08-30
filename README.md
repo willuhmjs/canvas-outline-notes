@@ -66,16 +66,24 @@ Assignments move between buckets automatically as their due dates shift relative
 
 ---
 
-### Token updater
+### Management app
 
-A small web form for rotating the Canvas API token without touching the command line. Paste your new token, click Save.
+A small SvelteKit web app (`management/`) for rotating the Canvas API token and editing settings
+without touching the command line — includes pages for Settings, Token, Triggers (run sync/notes
+on demand), and Logs.
 
-- **Kubernetes** — patches the `canvas-sync-secrets` Secret directly via the pod's ServiceAccount
-- **Docker** — writes to `/data/token.json`, which both scripts read as a fallback when `CANVAS_API_TOKEN` is not set as an environment variable
+- **Kubernetes** — patches the `canvas-sync-secrets`/`canvas-outline-secrets` Secrets and
+  `canvas-config` ConfigMap directly via the pod's ServiceAccount
+- **Docker** — reads/writes `/data/settings.json` and `/data/token.json`; both scripts read the
+  token file as a fallback when `CANVAS_API_TOKEN` is not set as an environment variable
 
 Shows the current token status (set/not set, character count, estimated expiry date).
 
-Designed to sit behind an auth proxy (Authentik, Authelia, etc.) — it trusts whoever reaches it.
+Login is required — the app has built-in OIDC authentication (works with Authentik, Authelia,
+Keycloak, or any OIDC-compliant identity provider). Register it as an OIDC client with redirect
+URI `https://<host>/auth/callback/oidc`, then set `AUTH_OIDC_ISSUER`, `AUTH_OIDC_ID`, and
+`AUTH_OIDC_SECRET`. Optionally restrict access to specific IdP groups with `ALLOWED_GROUPS`
+(comma-separated, checked against the `groups` claim on the ID token).
 
 ---
 
@@ -89,7 +97,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-That's it. `sync.py` runs every 15 minutes and `notes.py` runs every hour via supercronic. The token updater is available at `http://localhost:8080`.
+That's it. `sync.py` runs every 15 minutes and `notes.py` runs every hour via supercronic. The management app is available at `http://localhost:3000` (requires OIDC login — see below).
 
 ### Kubernetes
 
@@ -101,7 +109,6 @@ kubectl apply -f deploy/canvas-notes-serviceaccount.yaml
 # Create secrets (see deploy/README.md)
 kubectl apply -f deploy/canvas-sync-cronjob.yaml
 kubectl apply -f deploy/canvas-notes-cronjob.yaml
-kubectl apply -f deploy/token-updater-deployment.yaml
 ```
 
 Trigger a run manually:
@@ -151,6 +158,7 @@ kubectl logs -n dav job/canvas-sync-now
 | `OUTLINE_BASE_URL` | Outline instance URL (default: `https://outline.will.net`) |
 | `OUTLINE_COLLECTION_NAME` | Collection to file notes in (default: `Automatic Notes`) |
 | `STATE_FILE` | Path to state file (default: `/data/state.json`) |
+| `EXTRA_CA_CERT_FILE` | Path to a PEM file with an extra CA to trust (e.g. a self-signed intercepting proxy in front of Canvas/Outline/the LLM API). Verification stays fully enabled; this CA is trusted in addition to the system store. Leave unset for normal deployments. |
 
 ### Schedule (Docker / supercronic)
 
@@ -159,19 +167,32 @@ kubectl logs -n dav job/canvas-sync-now
 | `SYNC_INTERVAL_MINUTES` | `15` |
 | `NOTES_INTERVAL_MINUTES` | `60` |
 
+### Management app login (OIDC)
+
+| Variable | Description |
+|----------|-------------|
+| `AUTH_SECRET` | Random secret used to encrypt session cookies. Generate with `openssl rand -hex 32`. |
+| `AUTH_OIDC_ISSUER` | Your OIDC provider's issuer URL (e.g. `https://auth.example.com/application/o/canvas-management/`) |
+| `AUTH_OIDC_ID` | OIDC client ID |
+| `AUTH_OIDC_SECRET` | OIDC client secret |
+| `ALLOWED_GROUPS` | Optional comma-separated list of IdP groups allowed to log in. Leave unset to allow any user who can complete the OIDC flow. |
+
 ---
 
 ## Architecture
 
 ```
 canvas-outline-notes image
-├── sync.py          runs every 15 min — Canvas ICS → CalDAV
-├── notes.py         runs every hour  — Canvas API + files → Outline via LLM
-└── token_updater.py long-running     — web form for token rotation
+├── sync.py   runs every 15 min — Canvas ICS → CalDAV
+└── notes.py  runs every hour  — Canvas API + files → Outline via LLM
+
+canvas-outline-notes-management image (management/)
+└── SvelteKit app, long-running — Settings/Token/Triggers/Logs UI, OIDC login
 
 Shared volume (/data)
-├── state.json   — tracks last module scan timestamp
-└── token.json   — Canvas API token (Docker mode only)
+├── state.json      — tracks last module scan timestamp
+├── settings.json   — sync/outline/AI config (Docker mode only)
+└── token.json      — Canvas API token (Docker mode only)
 ```
 
 The two scripts are fully independent. A `sync.py` crash does not affect `notes.py` and vice versa.

@@ -21,10 +21,9 @@ kubectl create secret generic canvas-outline-secrets -n dav \
   --from-literal=CHAT_API_KEY=... \
   --from-literal=OUTLINE_API_TOKEN=...
 
-# 4. Deploy CronJobs + token updater
+# 4. Deploy CronJobs
 kubectl apply -f canvas-sync-cronjob.yaml
 kubectl apply -f canvas-notes-cronjob.yaml
-kubectl apply -f token-updater-deployment.yaml
 ```
 
 ## Files
@@ -32,10 +31,9 @@ kubectl apply -f token-updater-deployment.yaml
 | File | Purpose |
 |------|---------|
 | `pvc.yaml` | Shared storage for state file and token file |
-| `canvas-notes-serviceaccount.yaml` | RBAC for token updater to patch secrets |
+| `canvas-notes-serviceaccount.yaml` | RBAC for the sync state ConfigMap |
 | `canvas-sync-cronjob.yaml` | Syncs Canvas → CalDAV every 15 min |
 | `canvas-notes-cronjob.yaml` | Generates AI study notes every hour |
-| `token-updater-deployment.yaml` | Web form for rotating Canvas API token |
 
 ## Triggering manually
 
@@ -51,8 +49,9 @@ kubectl logs -n dav job/canvas-sync-manual
 kubectl logs -n dav job/canvas-notes-manual
 ```
 
-## Token updater
+## Token rotation and settings
 
-Expose the token updater behind your auth proxy (e.g. Authentik forward-auth).
-It auto-detects Kubernetes and patches `canvas-sync-secrets` directly.
-No manual `kubectl` needed to rotate the 90-day Canvas token.
+Use the `management` app (see the root README's "Management app login" section) for rotating
+the Canvas API token and editing settings — it has built-in OIDC login, auto-detects Kubernetes,
+and patches `canvas-sync-secrets` directly. No manual `kubectl` needed to rotate the 90-day
+Canvas token.
