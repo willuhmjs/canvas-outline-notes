@@ -423,6 +423,19 @@ YT_URL_RE = re.compile(
     r'([a-zA-Z0-9_-]{11})'
 )
 
+# Google Docs Editors "view"/"present"/"edit" links only serve a JS app shell
+# server-side -- no document content is present in the raw HTML. Rewriting to
+# Google's export endpoints gets the actual content instead. Forms and Sites
+# have no equivalent anonymous "export raw content" endpoint (Forms needs the
+# OAuth-gated Forms API; Sites is itself an arbitrary JS-rendered page), so
+# they aren't handled here -- they'd fall through to the generic URL fetch.
+GOOGLE_SLIDES_RE = re.compile(r'docs\.google\.com/presentation/d/(e/[\w-]+|[\w-]+)')
+GOOGLE_DOCS_RE = re.compile(r'docs\.google\.com/document/d/(e/[\w-]+|[\w-]+)')
+GOOGLE_SHEETS_RE = re.compile(r'docs\.google\.com/spreadsheets/d/(e/[\w-]+|[\w-]+)')
+GOOGLE_DRAWINGS_RE = re.compile(r'docs\.google\.com/drawings/d/(e/[\w-]+|[\w-]+)')
+
+PPTX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
 
 def format_rubric(rubric):
     if not rubric:
@@ -647,7 +660,7 @@ def fetch_url_text(url, timeout=15, max_bytes=300_000):
             if resp.status != 200:
                 return None, f"HTTP {resp.status}"
             ct = (resp.headers.get("Content-Type") or "").lower()
-            if not any(ct.startswith(t) for t in ("text/html", "text/plain", "application/xhtml")):
+            if not any(ct.startswith(t) for t in ("text/html", "text/plain", "application/xhtml", "text/csv")):
                 return None, f"non-text content-type: {ct.split(';')[0].strip()}"
             raw = resp.read(max_bytes)
             encoding = "utf-8"
@@ -668,6 +681,31 @@ def fetch_url_text(url, timeout=15, max_bytes=300_000):
             return None, f"paywall/access-gate detected ({signal!r})"
 
     return text[:8000], None
+
+
+def fetch_binary_url(url, expected_content_type, timeout=15, max_bytes=25_000_000):
+    """Fetch a URL expected to return a specific binary content type (e.g. a
+    Google Slides pptx export). Returns (bytes, None) on success, or
+    (None, skip_reason) on HTTP error or unexpected content-type -- the latter
+    usually means Google redirected to an HTML sign-in page because the file
+    isn't shared publicly."""
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; canvas-notes-bot/1.0)"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                return None, f"HTTP {resp.status}"
+            ct = (resp.headers.get("Content-Type") or "").lower()
+            if not ct.startswith(expected_content_type):
+                return None, f"unexpected content-type {ct.split(';')[0].strip()!r} (file may not be shared publicly)"
+            data = resp.read(max_bytes)
+    except urllib.error.URLError as exc:
+        return None, f"fetch error: {exc}"
+    except Exception as exc:
+        return None, f"error: {exc}"
+    return data, None
 
 
 def generate_text_notes(course_name, title, text, source_label):
@@ -1285,8 +1323,24 @@ def main():
                             stats["skipped"] += 1
                         continue
                     yt_match = YT_URL_RE.search(ref)
+                    slides_match = GOOGLE_SLIDES_RE.search(ref)
+                    docs_match = GOOGLE_DOCS_RE.search(ref)
+                    sheets_match = GOOGLE_SHEETS_RE.search(ref)
+                    drawings_match = GOOGLE_DRAWINGS_RE.search(ref)
                     if yt_match:
                         course_items.append(("youtube", course_name, module_folder_id, name, yt_match.group(1)))
+                    elif slides_match:
+                        export_url = f"https://docs.google.com/presentation/d/{slides_match.group(1)}/export/pptx"
+                        course_items.append(("google_file", course_name, module_folder_id, name, (export_url, PPTX_CONTENT_TYPE)))
+                    elif drawings_match:
+                        export_url = f"https://docs.google.com/drawings/d/{drawings_match.group(1)}/export/pdf"
+                        course_items.append(("google_file", course_name, module_folder_id, name, (export_url, "application/pdf")))
+                    elif docs_match:
+                        export_url = f"https://docs.google.com/document/d/{docs_match.group(1)}/export?format=txt"
+                        course_items.append(("url", course_name, module_folder_id, name, export_url))
+                    elif sheets_match:
+                        export_url = f"https://docs.google.com/spreadsheets/d/{sheets_match.group(1)}/export?format=csv"
+                        course_items.append(("url", course_name, module_folder_id, name, export_url))
                     else:
                         course_items.append(("url", course_name, module_folder_id, name, ref))
 
@@ -1391,6 +1445,23 @@ def main():
                     all_docs.append({"id": new_id, "title": name, "parentDocumentId": parent_doc_id})
                     stats["created"] += 1
                     print(f"created YouTube notes for '{course_name} / {name}'")
+
+                elif item_type == "google_file":
+                    course_name, parent_doc_id, name, item_data = item_args
+                    # item_data is (export_url, content_type) for a Google Slides/Drawings export
+                    export_url, content_type = item_data
+                    file_bytes, reason = fetch_binary_url(export_url, content_type)
+                    if file_bytes is None:
+                        print(f"WARNING: skipping Google file '{name}': {reason}", file=sys.stderr)
+                        continue
+                    doc_text = generate_presentation_notes(course_name, name, file_bytes, content_type)
+                    if doc_text is None:
+                        print(f"WARNING: skipping Google file '{name}': no extractable content", file=sys.stderr)
+                        continue
+                    new_id = create_document(collection_id, parent_doc_id, name, doc_text)
+                    all_docs.append({"id": new_id, "title": name, "parentDocumentId": parent_doc_id})
+                    stats["created"] += 1
+                    print(f"created Google file notes for '{course_name} / {name}'")
 
                 elif item_type == "url":
                     course_name, parent_doc_id, name, item_data = item_args
