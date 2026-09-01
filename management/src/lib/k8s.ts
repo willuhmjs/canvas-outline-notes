@@ -364,6 +364,57 @@ export async function getRecentJobLogs(
 	);
 }
 
+// notes.py prints this once it knows how many items it's about to work
+// through -- see the "processing N item(s) this run" print in notes.py.
+const ITEMS_TOTAL_RE = /^processing (\d+) item/;
+// Lines that mark one item as finished (successfully or not), whether it's a
+// notes.py run ("created ...", "moved ...", "WARNING: skipping ...", "ERROR
+// processing ...") or a sync.py run's per-item output.
+const ITEM_DONE_RE = /^(created|moved|regenerated|marked|WARNING: skipping|ERROR processing)/;
+
+/**
+ * Live progress for a running job, parsed from its pod's log tail:
+ * the most recent non-empty line (what it's doing right now) plus a rough
+ * "N processed / total" count. Returns nulls if the pod has no logs yet.
+ */
+export async function getJobProgress(jobName: string): Promise<{
+	latestLine: string | null;
+	itemsProcessed: number;
+	itemsTotal: number | null;
+}> {
+	const ns = getNamespace();
+	const pod = await getPodNameForJob(jobName);
+	if (!pod) return { latestLine: null, itemsProcessed: 0, itemsTotal: null };
+
+	try {
+		const raw = await k8sRequest<string>(
+			'GET',
+			`/api/v1/namespaces/${ns}/pods/${pod}/log?tailLines=1000&timestamps=true`
+		);
+		const lines = (typeof raw === 'string' ? raw : '')
+			.split('\n')
+			// Strip the leading RFC3339 timestamp k8s adds with timestamps=true.
+			.map((l) => l.replace(/^\S+\s/, '').trim())
+			.filter(Boolean);
+
+		let itemsTotal: number | null = null;
+		let itemsProcessed = 0;
+		for (const line of lines) {
+			const totalMatch = line.match(ITEMS_TOTAL_RE);
+			if (totalMatch) itemsTotal = parseInt(totalMatch[1], 10);
+			if (ITEM_DONE_RE.test(line)) itemsProcessed++;
+		}
+
+		return {
+			latestLine: lines.length ? lines[lines.length - 1] : null,
+			itemsProcessed,
+			itemsTotal
+		};
+	} catch {
+		return { latestLine: null, itemsProcessed: 0, itemsTotal: null };
+	}
+}
+
 // ── Docker mode ──────────────────────────────────────────────────────────────
 
 const DEFAULT_DOCKER_SETTINGS: DockerSettings = {

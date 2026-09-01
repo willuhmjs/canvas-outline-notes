@@ -1354,6 +1354,10 @@ def main():
                 if items:
                     round_robin.append(items.pop(0))
 
+        # Parsed by the management app to show live "N processed" progress
+        # for a running job -- keep this format in sync with k8s.ts's parser.
+        print(f"processing {len(round_robin)} item(s) this run")
+
         for item_type, *item_args in round_robin:
             # Moves don't count toward MAX_NEW_PER_RUN -- they're cheap (no LLM call)
             if item_type == "move":

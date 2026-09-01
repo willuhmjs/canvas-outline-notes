@@ -69,6 +69,10 @@ export interface K8sJob {
 	status: 'running' | 'succeeded' | 'failed' | 'unknown';
 	startTime: string | null;
 	completionTime: string | null;
+	/** Live activity, populated only while status === 'running'. */
+	latestLine?: string | null;
+	itemsProcessed?: number;
+	itemsTotal?: number | null;
 }
 
 export interface DockerJobRecord {

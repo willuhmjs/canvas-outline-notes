@@ -2,7 +2,7 @@
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
 	import type { PageData, ActionData } from './$types';
-	import type { DockerJobRecord } from '$lib/types';
+	import type { DockerJobRecord, K8sJob } from '$lib/types';
 
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 
@@ -22,15 +22,6 @@
 			? Math.round((data.regenerateProgress.deleted / data.regenerateProgress.total) * 100)
 			: 0
 	);
-
-	// Poll while a regeneration is running so the progress bar (and a reload
-	// mid-run) reflect the actual on-disk state. The server auto-heals a
-	// stalled run on read, so a hang self-recovers within one poll interval.
-	$effect(() => {
-		if (!regenerateActive) return;
-		const id = setInterval(() => invalidate('triggers:regenerate'), 1200);
-		return () => clearInterval(id);
-	});
 
 	function formResult(action: string) {
 		if (!form) return null;
@@ -77,6 +68,27 @@
 			? data.recentJobs
 			: data.dockerHistory
 	);
+
+	// Live activity/progress is only available in kubernetes mode (parsed from
+	// pod logs) -- docker mode only records final output on completion.
+	const anyJobRunning = $derived(
+		data.mode === 'kubernetes' && jobs.some((j) => j.status === 'running')
+	);
+
+	// Poll while a regeneration or any job is running, so the progress bar,
+	// live activity line, and a reload mid-run all reflect actual live state.
+	// The server auto-heals a stalled regenerate run on read, so a hang
+	// self-recovers within one poll interval.
+	$effect(() => {
+		if (!regenerateActive && !anyJobRunning) return;
+		const id = setInterval(() => invalidate('triggers:regenerate'), 1200);
+		return () => clearInterval(id);
+	});
+
+	function jobPercent(job: K8sJob): number | null {
+		if (!job.itemsTotal) return null;
+		return Math.min(100, Math.round(((job.itemsProcessed ?? 0) / job.itemsTotal) * 100));
+	}
 </script>
 
 <svelte:head>
@@ -368,7 +380,7 @@
 		{:else}
 			<div class="space-y-2">
 				{#each jobs as job}
-					{@const j = job as typeof job & Partial<DockerJobRecord>}
+					{@const j = job as typeof job & Partial<DockerJobRecord> & Partial<K8sJob>}
 					<div class="rounded-lg bg-slate-700/50 border border-slate-600/50 p-3">
 						<div class="flex items-center justify-between flex-wrap gap-2">
 							<div class="flex items-center gap-2 min-w-0">
@@ -387,6 +399,33 @@
 								{/if}
 							</div>
 						</div>
+
+						<!-- Kubernetes: live progress while the job is running -->
+						{#if data.mode === 'kubernetes' && job.status === 'running'}
+							{@const percent = jobPercent(j as K8sJob)}
+							<div class="mt-2.5 space-y-1.5">
+								<div class="h-1.5 rounded-full bg-slate-800 overflow-hidden">
+									{#if percent !== null}
+										<div
+											class="h-full rounded-full bg-indigo-500 transition-all"
+											style="width: {percent}%"
+										></div>
+									{:else}
+										<div class="h-full w-full bg-indigo-500/40 animate-pulse"></div>
+									{/if}
+								</div>
+								<div class="flex items-center justify-between gap-2">
+									<p class="text-xs font-mono text-slate-400 truncate">
+										{j.latestLine ?? 'Starting…'}
+									</p>
+									{#if j.itemsTotal}
+										<span class="text-[11px] text-slate-500 flex-shrink-0">
+											{j.itemsProcessed ?? 0}/{j.itemsTotal}
+										</span>
+									{/if}
+								</div>
+							</div>
+						{/if}
 
 						<!-- Docker: show abbreviated output -->
 						{#if data.mode === 'docker' && j.output}

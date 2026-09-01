@@ -4,6 +4,7 @@ import {
 	isKubernetes,
 	getAllSettings,
 	listManualJobs,
+	getJobProgress,
 	triggerSync,
 	triggerNotes,
 	clearCredentialAlarm,
@@ -181,6 +182,15 @@ export const load: PageServerLoad = async ({ depends }) => {
 
 	if (isKubernetes()) {
 		recentJobs = await listManualJobs().catch(() => []);
+		const running = recentJobs.filter((j) => j.status === 'running');
+		await Promise.all(
+			running.map(async (j) => {
+				const progress = await getJobProgress(j.name);
+				j.latestLine = progress.latestLine;
+				j.itemsProcessed = progress.itemsProcessed;
+				j.itemsTotal = progress.itemsTotal;
+			})
+		);
 	} else {
 		const settings = readDockerSettings();
 		dockerHistory = (settings.jobHistory ?? []).slice(0, 10);
