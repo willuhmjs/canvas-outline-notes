@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # Install supercronic (Docker scheduling) and ca-certificates (for custom CA injection)
 ARG SUPERCRONIC_VERSION=0.2.33
