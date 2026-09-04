@@ -14,6 +14,41 @@
 		};
 	}
 
+	let revealedToken = $state<string | null>(null);
+	let copyState = $state<'idle' | 'copied' | 'failed'>('idle');
+
+	function revealToken() {
+		return async ({
+			result,
+			update
+		}: {
+			result: { type: string; data?: { revealedToken?: string } };
+			update: (opts?: { reset?: boolean }) => Promise<void>;
+		}) => {
+			if (result.type === 'success' && result.data?.revealedToken) {
+				revealedToken = result.data.revealedToken;
+				copyState = 'idle';
+				return; // keep the token out of form data
+			}
+			await update({ reset: false }); // failures: surface revealError via form
+		};
+	}
+
+	async function copyRevealed() {
+		if (!revealedToken) return;
+		try {
+			await navigator.clipboard.writeText(revealedToken);
+			copyState = 'copied';
+		} catch {
+			copyState = 'failed';
+		}
+	}
+
+	function hideRevealed() {
+		revealedToken = null;
+		copyState = 'idle';
+	}
+
 	function progressPercent(): number {
 		if (!tokenStatus.isSet || tokenStatus.daysElapsed === null) return 0;
 		return Math.min(100, Math.max(0, (tokenStatus.daysElapsed / tokenStatus.daysTotal) * 100));
@@ -171,6 +206,53 @@
 			</div>
 		{/if}
 	</div>
+
+	<!-- Read/copy stored token -->
+	{#if tokenLength}
+		<div class="card space-y-4">
+			<div>
+				<h2 class="text-base font-semibold text-slate-200">Read Current Token</h2>
+				<p class="text-xs text-slate-500 mt-0.5">
+					Reveal and copy the stored token to use it elsewhere — MCP servers, scripts, API clients.
+				</p>
+			</div>
+
+			{#if (form as Record<string, unknown> | null)?.revealError}
+				<div class="rounded-lg bg-red-900/20 border border-red-800 px-4 py-3">
+					<p class="text-sm text-red-400">{(form as Record<string, unknown>).revealError as string}</p>
+				</div>
+			{/if}
+
+			{#if revealedToken}
+				<code class="block rounded-lg bg-slate-900 border border-slate-700 px-3 py-2.5 font-mono text-xs text-slate-200 break-all select-all">
+					{revealedToken}
+				</code>
+				<div class="flex items-center gap-3">
+					<button type="button" onclick={copyRevealed} class="btn-primary text-xs">
+						Copy to clipboard
+					</button>
+					<button type="button" onclick={hideRevealed} class="btn-secondary text-xs">
+						Hide
+					</button>
+					{#if copyState === 'copied'}
+						<span class="text-xs text-green-400">Copied!</span>
+					{:else if copyState === 'failed'}
+						<span class="text-xs text-red-400">Copy failed — select the text manually</span>
+					{/if}
+				</div>
+			{:else}
+				<form method="POST" action="?/reveal" use:enhance={revealToken}>
+					<button type="submit" class="btn-secondary">
+						Reveal token
+					</button>
+				</form>
+			{/if}
+
+			<p class="text-xs text-slate-500">
+				Treat the token like a password — anyone holding it can act as you in Canvas.
+			</p>
+		</div>
+	{/if}
 
 	<!-- Instructions card -->
 	<div class="card space-y-4 border-slate-700/60">

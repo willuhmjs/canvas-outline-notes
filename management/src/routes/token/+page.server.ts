@@ -3,6 +3,27 @@ import type { PageServerLoad, Actions } from './$types';
 import { isKubernetes, getSecretData, patchSecret, readDockerSettings, writeDockerSettings } from '$lib/k8s';
 import { computeTokenStatus } from '$lib/state';
 
+// The token exactly as the sync jobs see it: in docker mode sync.py/notes.py
+// fall back to /data/token.json when the settings secret is empty, so both
+// stores are read. In k8s mode the pods read the canvas-sync-secrets Secret
+// directly, which getSecretData already covers.
+async function readStoredTokenDocker(): Promise<{ token?: string; issuedAt?: string }> {
+	const sec = readDockerSettings().secrets['canvas-sync-secrets'];
+	let token = sec.CANVAS_API_TOKEN;
+	let issuedAt = sec.CANVAS_API_TOKEN_ISSUED_AT;
+	if (!token) {
+		try {
+			const fs = await import('fs');
+			const raw = JSON.parse(fs.default.readFileSync('/data/token.json', 'utf-8'));
+			if (typeof raw.token === 'string') token = raw.token;
+			if (!issuedAt && typeof raw.issued_at === 'string') issuedAt = raw.issued_at;
+		} catch {
+			// no token file -- token genuinely unset
+		}
+	}
+	return { token, issuedAt };
+}
+
 export const load: PageServerLoad = async () => {
 	let issuedAt: string | undefined;
 	let tokenLength: number | null = null;
@@ -12,10 +33,9 @@ export const load: PageServerLoad = async () => {
 		issuedAt = data.CANVAS_API_TOKEN_ISSUED_AT;
 		tokenLength = data.CANVAS_API_TOKEN?.length ?? null;
 	} else {
-		const settings = readDockerSettings();
-		const sec = settings.secrets['canvas-sync-secrets'];
-		issuedAt = sec.CANVAS_API_TOKEN_ISSUED_AT;
-		tokenLength = sec.CANVAS_API_TOKEN?.length ?? null;
+		const stored = await readStoredTokenDocker();
+		issuedAt = stored.issuedAt;
+		tokenLength = stored.token?.length ?? null;
 	}
 
 	const tokenStatus = computeTokenStatus(issuedAt);
@@ -34,6 +54,20 @@ export const load: PageServerLoad = async () => {
 };
 
 export const actions: Actions = {
+	reveal: async () => {
+		let token: string | undefined;
+		if (isKubernetes()) {
+			const data = await getSecretData('canvas-sync-secrets');
+			token = data.CANVAS_API_TOKEN;
+		} else {
+			token = (await readStoredTokenDocker()).token;
+		}
+		if (!token) {
+			return fail(404, { revealError: 'No token is stored yet — paste one below first.' });
+		}
+		return { revealedToken: token };
+	},
+
 	save: async ({ request }) => {
 		const fd = await request.formData();
 		const token = (fd.get('token') as string | null)?.trim() ?? '';
