@@ -117,6 +117,10 @@ STATE_FILE = os.environ.get("STATE_FILE", "/state/canvas-notes-state.json")
 MAX_FILE_BYTES = 20 * 1024 * 1024
 MAX_PDF_PAGES_AS_IMAGES = 5
 MAX_ATTACHMENTS_PER_ASSIGNMENT = 10
+# Cap on links harvested from a single Canvas Page body (Canvas file links plus
+# external URLs; only links that actually queue an item count toward it).
+# Insurance against a link-farm page turning one scan into dozens of LLM calls.
+MAX_LINKS_PER_PAGE = 15
 MAX_IMAGES_PER_REQUEST = 6
 # A generous backstop, not a deliberate throttle -- just cheap insurance against a truly
 # pathological one-time backlog (e.g. many overlapping current-term courses) blowing past
@@ -132,6 +136,10 @@ CANVAS_HEADERS = {"Authorization": f"Bearer {CANVAS_API_TOKEN}"}
 COURSE_NAME_RE = re.compile(r"^\d+_\w+_\d+\s+(.*)$")
 FILE_ID_RE = re.compile(r"/files/(\d+)")
 TAG_RE = re.compile(r"<[^>]+>")
+# <a href="...">anchor</a> pairs, for harvesting links embedded in Page bodies.
+# Group 2 matches lazily up to the closing </a> so nested tags inside the
+# anchor (spans, images) stay contained.
+LINK_RE = re.compile(r"<a\b[^>]*?href=[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", re.IGNORECASE | re.DOTALL)
 DAV_NS = {"d": "DAV:", "c": "urn:ietf:params:xml:ns:caldav"}
 
 
@@ -435,6 +443,69 @@ GOOGLE_SHEETS_RE = re.compile(r'docs\.google\.com/spreadsheets/d/(e/[\w-]+|[\w-]
 GOOGLE_DRAWINGS_RE = re.compile(r'docs\.google\.com/drawings/d/(e/[\w-]+|[\w-]+)')
 
 PPTX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+
+def is_presentation_file(content_type, display_name):
+    """Only pdf/pptx files (by Canvas MIME type or filename extension) get
+    presentation notes -- same filter for module File entries and for files
+    linked inside Page bodies."""
+    name_lower = (display_name or "").lower()
+    return (
+        content_type == "application/pdf"
+        or name_lower.endswith(".pdf")
+        or "presentationml" in content_type
+        or name_lower.endswith(".pptx")
+    )
+
+
+def classify_external_url(url):
+    """Maps an external URL to the same item types used for ExternalUrl module
+    entries: YouTube video, Google Slides/Drawings binary export, Google
+    Docs/Sheets text export, or a generic web page. Generic pages and Google
+    exports are fetched during processing and skipped automatically when they
+    turn out to be inaccessible, so it's safe to queue speculative links."""
+    yt_match = YT_URL_RE.search(url)
+    slides_match = GOOGLE_SLIDES_RE.search(url)
+    docs_match = GOOGLE_DOCS_RE.search(url)
+    sheets_match = GOOGLE_SHEETS_RE.search(url)
+    drawings_match = GOOGLE_DRAWINGS_RE.search(url)
+    if yt_match:
+        return "youtube", yt_match.group(1)
+    if slides_match:
+        export_url = f"https://docs.google.com/presentation/d/{slides_match.group(1)}/export/pptx"
+        return "google_file", (export_url, PPTX_CONTENT_TYPE)
+    if drawings_match:
+        export_url = f"https://docs.google.com/drawings/d/{drawings_match.group(1)}/export/pdf"
+        return "google_file", (export_url, "application/pdf")
+    if docs_match:
+        export_url = f"https://docs.google.com/document/d/{docs_match.group(1)}/export?format=txt"
+        return "url", export_url
+    if sheets_match:
+        export_url = f"https://docs.google.com/spreadsheets/d/{sheets_match.group(1)}/export?format=csv"
+        return "url", export_url
+    return "url", url
+
+
+def queue_module_item(all_docs, all_module_parents, course_items, stats,
+                      course_name, module_folder_id, name, item_type, item_data):
+    """Shared queueing for module entries and links harvested from Page bodies.
+    When a notes doc with this title already exists in one of the course's
+    module folders, move it to the folder this item came from (or count it
+    skipped when it's already there); otherwise queue the item for
+    summarization."""
+    existing_id, existing_parent = None, None
+    for d in all_docs:
+        if d.get("title") == name and d.get("parentDocumentId") in all_module_parents:
+            existing_id = d["id"]
+            existing_parent = d.get("parentDocumentId")
+            break
+    if existing_id is not None:
+        if existing_parent != module_folder_id:
+            course_items.append(("move", course_name, module_folder_id, name, existing_id))
+        else:
+            stats["skipped"] += 1
+        return
+    course_items.append((item_type, course_name, module_folder_id, name, item_data))
 
 
 def format_rubric(rubric):
@@ -1204,7 +1275,9 @@ def main():
                     modules = []
 
             # Scan every module's items for File, Page, and ExternalUrl content.
-            # (type, ref, title, module_name, module_folder_id): organize by module
+            # (type, ref, title, module_name, module_folder_id): organize by module.
+            # Page bodies additionally get their embedded links harvested below
+            # (Canvas file links, external URLs) and queued like module entries.
             raw_module_items, seen_refs = [], set()
             module_folders = {}  # {module_name: folder_id}
             for mod in modules:
@@ -1259,26 +1332,10 @@ def main():
                         continue
                     ct = meta.get("content-type") or meta.get("content_type") or ""
                     disp = meta.get("display_name") or title
-                    name_lower = disp.lower()
-                    if not (ct == "application/pdf" or name_lower.endswith(".pdf")
-                            or "presentationml" in ct or name_lower.endswith(".pptx")):
+                    if not is_presentation_file(ct, disp):
                         continue
-                    name = disp
-                    # Check if item exists in any module folder or old flat Notes
-                    existing_id, existing_parent = None, None
-                    for d in all_docs:
-                        if d.get("title") == name and d.get("parentDocumentId") in all_module_parents:
-                            existing_id = d["id"]
-                            existing_parent = d.get("parentDocumentId")
-                            break
-                    if existing_id is not None:
-                        if existing_parent != module_folder_id:
-                            # Wrong module folder - move it
-                            course_items.append(("move", course_name, module_folder_id, name, existing_id))
-                        else:
-                            stats["skipped"] += 1
-                        continue
-                    course_items.append(("file", course_name, module_folder_id, name, meta))
+                    queue_module_item(all_docs, all_module_parents, course_items, stats,
+                                      course_name, module_folder_id, disp, "file", meta)
 
                 elif itype == "Page":
                     try:
@@ -1288,61 +1345,65 @@ def main():
                     except Exception:
                         continue
                     body_html = page_data.get("body") or ""
+                    # Follow links embedded in the page body, treating each like
+                    # the equivalent module entry: Canvas file links become "file"
+                    # items (presentation notes when pdf/pptx), external links get
+                    # the ExternalUrl classification (YouTube, Google exports,
+                    # generic web page). Each is fetched during processing and
+                    # skipped automatically when inaccessible. Runs before the
+                    # page-length check so link-only pages still yield their files.
+                    links_queued = 0
+                    for href, anchor_html in LINK_RE.findall(body_html):
+                        if links_queued >= MAX_LINKS_PER_PAGE:
+                            break
+                        href = html.unescape(href).strip()
+                        fid_match = FILE_ID_RE.search(href)
+                        if fid_match:
+                            link_type, link_ref = "File", fid_match.group(1)
+                        elif href.startswith(("http://", "https://")):
+                            link_type, link_ref = "ExternalUrl", href
+                        else:
+                            continue  # mailto:/tel:, #anchors, internal Canvas page/module links
+                        if (link_type, link_ref) in seen_refs:
+                            continue
+                        seen_refs.add((link_type, link_ref))
+                        anchor_text = html_to_text(anchor_html).replace("(Links to an external site.)", "").strip()
+                        if link_type == "File":
+                            # "Try to access it": pages often link files that are
+                            # deleted, restricted, or from another course, which
+                            # 401/403/404. This token just fetched this page
+                            # successfully, so a failure here means the link is
+                            # dead, not that the credential is -- skip the link
+                            # instead of aborting the run.
+                            try:
+                                fmeta = canvas_get(f"/api/v1/files/{link_ref}")
+                            except Exception:
+                                continue
+                            if fmeta.get("locked_for_user"):
+                                continue
+                            ct = fmeta.get("content-type") or fmeta.get("content_type") or ""
+                            disp = fmeta.get("display_name") or anchor_text or link_ref
+                            if not is_presentation_file(ct, disp):
+                                continue
+                            queue_module_item(all_docs, all_module_parents, course_items, stats,
+                                              course_name, module_folder_id, disp, "file", fmeta)
+                        else:
+                            ext_type, ext_data = classify_external_url(link_ref)
+                            queue_module_item(all_docs, all_module_parents, course_items, stats,
+                                              course_name, module_folder_id,
+                                              anchor_text or link_ref, ext_type, ext_data)
+                        links_queued += 1
                     text = html_to_text(body_html)
                     if len(text) < 300:
-                        continue  # skip near-empty pages (index, link-only, etc.)
-                    name = page_data.get("title") or title
-                    # Check if item exists in any module folder
-                    existing_id, existing_parent = None, None
-                    for d in all_docs:
-                        if d.get("title") == name and d.get("parentDocumentId") in all_module_parents:
-                            existing_id = d["id"]
-                            existing_parent = d.get("parentDocumentId")
-                            break
-                    if existing_id is not None:
-                        if existing_parent != module_folder_id:
-                            course_items.append(("move", course_name, module_folder_id, name, existing_id))
-                        else:
-                            stats["skipped"] += 1
-                        continue
-                    course_items.append(("page", course_name, module_folder_id, name, text))
+                        continue  # near-empty page (index, etc.) -- links were harvested above
+                    queue_module_item(all_docs, all_module_parents, course_items, stats,
+                                      course_name, module_folder_id,
+                                      page_data.get("title") or title, "page", text)
 
                 elif itype == "ExternalUrl":
-                    name = title
-                    # Check if item exists in any module folder
-                    existing_id, existing_parent = None, None
-                    for d in all_docs:
-                        if d.get("title") == name and d.get("parentDocumentId") in all_module_parents:
-                            existing_id = d["id"]
-                            existing_parent = d.get("parentDocumentId")
-                            break
-                    if existing_id is not None:
-                        if existing_parent != module_folder_id:
-                            course_items.append(("move", course_name, module_folder_id, name, existing_id))
-                        else:
-                            stats["skipped"] += 1
-                        continue
-                    yt_match = YT_URL_RE.search(ref)
-                    slides_match = GOOGLE_SLIDES_RE.search(ref)
-                    docs_match = GOOGLE_DOCS_RE.search(ref)
-                    sheets_match = GOOGLE_SHEETS_RE.search(ref)
-                    drawings_match = GOOGLE_DRAWINGS_RE.search(ref)
-                    if yt_match:
-                        course_items.append(("youtube", course_name, module_folder_id, name, yt_match.group(1)))
-                    elif slides_match:
-                        export_url = f"https://docs.google.com/presentation/d/{slides_match.group(1)}/export/pptx"
-                        course_items.append(("google_file", course_name, module_folder_id, name, (export_url, PPTX_CONTENT_TYPE)))
-                    elif drawings_match:
-                        export_url = f"https://docs.google.com/drawings/d/{drawings_match.group(1)}/export/pdf"
-                        course_items.append(("google_file", course_name, module_folder_id, name, (export_url, "application/pdf")))
-                    elif docs_match:
-                        export_url = f"https://docs.google.com/document/d/{docs_match.group(1)}/export?format=txt"
-                        course_items.append(("url", course_name, module_folder_id, name, export_url))
-                    elif sheets_match:
-                        export_url = f"https://docs.google.com/spreadsheets/d/{sheets_match.group(1)}/export?format=csv"
-                        course_items.append(("url", course_name, module_folder_id, name, export_url))
-                    else:
-                        course_items.append(("url", course_name, module_folder_id, name, ref))
+                    ext_type, ext_data = classify_external_url(ref)
+                    queue_module_item(all_docs, all_module_parents, course_items, stats,
+                                      course_name, module_folder_id, title, ext_type, ext_data)
 
             if course_items:
                 pending_by_course.append(course_items)
