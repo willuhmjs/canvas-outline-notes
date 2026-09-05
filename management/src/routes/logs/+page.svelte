@@ -79,7 +79,7 @@
 		<h1 class="text-2xl font-semibold text-slate-100">Logs</h1>
 		<p class="text-sm text-slate-400 mt-1">
 			{#if data.mode === 'kubernetes'}
-				Logs from the last 3 completed manual job runs per script.
+				Logs from the last 3 completed runs per script — scheduled cron runs and manual triggers alike.
 			{:else}
 				Output from manually triggered Docker subprocess runs.
 			{/if}
@@ -121,7 +121,7 @@
 			<p class="text-slate-400 text-sm">No {activeTab} logs yet.</p>
 			{#if data.mode === 'kubernetes'}
 				<p class="text-slate-500 text-xs mt-1">
-					Trigger a manual run on the <a href="/triggers" class="text-indigo-400 hover:text-indigo-300">Triggers</a> page to see logs here.
+					Runs appear here once they finish — scheduled runs land here automatically, or trigger one on the <a href="/triggers" class="text-indigo-400 hover:text-indigo-300">Triggers</a> page.
 				</p>
 			{:else}
 				<p class="text-slate-500 text-xs mt-1">

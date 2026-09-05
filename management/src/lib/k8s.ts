@@ -224,6 +224,7 @@ interface K8sJobListBody {
 			creationTimestamp: string;
 			labels?: Record<string, string>;
 			annotations?: Record<string, string>;
+			ownerReferences?: Array<{ kind: string; name: string }>;
 		};
 		status: {
 			active?: number;
@@ -275,6 +276,35 @@ export async function createJobFromCronJob(
 	});
 }
 
+/** Map a k8s Job to the app's shape; type comes from the manual-trigger
+ * label or, for cron-created jobs, the owning CronJob's name. */
+function toK8sJob(j: K8sJobListBody['items'][number]): K8sJob {
+	const cronName =
+		j.metadata.labels?.['canvas-management/cronjob'] ??
+		j.metadata.ownerReferences?.find((o) => o.kind === 'CronJob')?.name ??
+		'';
+	const type: K8sJob['type'] =
+		cronName === 'canvas-sync'
+			? 'sync'
+			: cronName === 'canvas-notes'
+				? 'notes'
+				: 'unknown';
+
+	let status: K8sJob['status'] = 'unknown';
+	if ((j.status.active ?? 0) > 0) status = 'running';
+	else if ((j.status.succeeded ?? 0) > 0) status = 'succeeded';
+	else if ((j.status.failed ?? 0) > 0) status = 'failed';
+
+	return {
+		name: j.metadata.name,
+		namespace: j.metadata.namespace,
+		type,
+		status,
+		startTime: j.status.startTime ?? j.metadata.creationTimestamp,
+		completionTime: j.status.completionTime ?? null
+	};
+}
+
 /** List recently triggered manual jobs, newest first. */
 export async function listManualJobs(): Promise<K8sJob[]> {
 	const ns = getNamespace();
@@ -286,33 +316,36 @@ export async function listManualJobs(): Promise<K8sJob[]> {
 		);
 
 		return body.items
-			.map((j) => {
-				const cronName = j.metadata.labels?.['canvas-management/cronjob'] ?? '';
-				const type: K8sJob['type'] =
-					cronName === 'canvas-sync'
-						? 'sync'
-						: cronName === 'canvas-notes'
-							? 'notes'
-							: 'unknown';
-
-				let status: K8sJob['status'] = 'unknown';
-				if ((j.status.active ?? 0) > 0) status = 'running';
-				else if ((j.status.succeeded ?? 0) > 0) status = 'succeeded';
-				else if ((j.status.failed ?? 0) > 0) status = 'failed';
-
-				return {
-					name: j.metadata.name,
-					namespace: j.metadata.namespace,
-					type,
-					status,
-					startTime: j.status.startTime ?? j.metadata.creationTimestamp,
-					completionTime: j.status.completionTime ?? null
-				};
-			})
+			.map(toK8sJob)
 			.sort((a, b) => (b.startTime ?? '').localeCompare(a.startTime ?? ''))
 			.slice(0, 10);
 	} catch (e) {
 		console.error('listManualJobs:', e);
+		return [];
+	}
+}
+
+/** List recent scheduled cron runs (jobs owned by a canvas cronjob), newest first. */
+export async function listScheduledJobs(): Promise<K8sJob[]> {
+	const ns = getNamespace();
+	try {
+		const body = await k8sRequest<K8sJobListBody>(
+			'GET',
+			`/apis/batch/v1/namespaces/${ns}/jobs?limit=50`
+		);
+
+		return body.items
+			.filter((j) =>
+				j.metadata.ownerReferences?.some(
+					(o) => o.kind === 'CronJob' && (o.name === 'canvas-sync' || o.name === 'canvas-notes')
+				)
+			)
+			.map(toK8sJob)
+			.filter((j) => j.type !== 'unknown')
+			.sort((a, b) => (b.startTime ?? '').localeCompare(a.startTime ?? ''))
+			.slice(0, 10);
+	} catch (e) {
+		console.error('listScheduledJobs:', e);
 		return [];
 	}
 }
@@ -354,9 +387,13 @@ export async function getRecentJobLogs(
 	type: 'sync' | 'notes',
 	count = 3
 ): Promise<Array<K8sJob & { logs: string }>> {
-	const all = await listManualJobs();
-	const filtered = all
+	const [manual, scheduled] = await Promise.all([
+		listManualJobs().catch((): K8sJob[] => []),
+		listScheduledJobs().catch((): K8sJob[] => [])
+	]);
+	const filtered = [...manual, ...scheduled]
 		.filter((j) => j.type === type && j.status !== 'running')
+		.sort((a, b) => (b.startTime ?? '').localeCompare(a.startTime ?? ''))
 		.slice(0, count);
 
 	return Promise.all(
