@@ -27,6 +27,7 @@ import sys
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+import zoneinfo
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlencode, urljoin, urlsplit
 
@@ -59,6 +60,7 @@ COMPLETION_LOOKAHEAD_DAYS = int(os.environ.get("COMPLETION_LOOKAHEAD_DAYS", 21))
 CANVAS_API_TOKEN_ESTIMATED_LIFETIME_DAYS = int(os.environ.get("TOKEN_LIFETIME_DAYS", 90))
 TOKEN_RENEWAL_LEAD_DAYS = int(os.environ.get("TOKEN_RENEWAL_LEAD_DAYS", 7))
 ALARM_TRIGGER = os.environ.get("ALARM_TRIGGER", "PT6H")
+CANVAS_TZ = zoneinfo.ZoneInfo(os.environ.get("CANVAS_TZ", "America/New_York"))
 
 CANVAS_ICS_URL = os.environ["CANVAS_ICS_URL"]
 CANVAS_API_TOKEN = os.environ.get("CANVAS_API_TOKEN", "")
@@ -403,12 +405,27 @@ def ics_escape(value):
     )
 
 
+def due_date_from_dtstart(value):
+    """DUE;VALUE=DATE requires a bare YYYYMMDD, but timed Canvas events carry
+    a UTC DATE-TIME as DTSTART. Taking the UTC date directly would push
+    local-midnight deadlines (e.g. 23:59 EDT = 03:59Z next day) onto the
+    wrong day, so convert to CANVAS_TZ first; all-day VALUE=DATE values
+    pass through unchanged.
+    """
+    if "T" not in value:
+        return value
+    dt = datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+    return dt.astimezone(CANVAS_TZ).strftime("%Y%m%d")
+
+
 def parse_assignments(raw):
-    """Canvas exports every assignment as an all-day VEVENT with a stable UID
-    (event-assignment-<id> / event-assignment-override-<id>). Note DTSTART often
-    carries a duplicated VALUE=DATE parameter (a quirk of Canvas's icalendar-ruby
-    generator) -- harmless here since we only ever take the value after the last
-    colon, never a parsed parameter dict.
+    """Canvas exports assignments as VEVENTs with a stable UID
+    (event-assignment-<id> / event-assignment-override-<id>). All-day events
+    carry a VALUE=DATE DTSTART; timed ones a UTC DATE-TIME, normalized to a
+    local date by due_date_from_dtstart. Note DTSTART often carries a
+    duplicated VALUE=DATE parameter (a quirk of Canvas's icalendar-ruby
+    generator) -- harmless here since we only ever take the value after the
+    last colon, never a parsed parameter dict.
     """
     assignments = []
     current = None
@@ -430,7 +447,7 @@ def parse_assignments(raw):
         elif name == "SUMMARY":
             current["summary"] = ics_unescape(value)
         elif name == "DTSTART":
-            current["due_date"] = value.strip()
+            current["due_date"] = due_date_from_dtstart(value.strip())
         elif name == "URL":
             current["url"] = value.strip()
         elif name == "DESCRIPTION":
