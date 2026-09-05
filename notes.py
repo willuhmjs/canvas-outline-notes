@@ -277,6 +277,22 @@ def fetch_canvas_file(file_id):
     return {"display_name": meta.get("display_name", f"file-{file_id}"), "content_type": content_type, "bytes": content}
 
 
+# The chat endpoint decodes image attachments server-side with Pillow, which
+# only reads the classic raster formats -- SVG icons (common in ODU course
+# template descriptions) are the usual offender, and one bad attachment 400s
+# the whole request with an opaque "cannot identify image file". Sniff magic
+# bytes client-side and only send what the server can decode.
+IMAGE_MAGICS = (b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n", b"GIF87a", b"GIF89a", b"BM", b"II*\x00", b"MM\x00*")
+
+
+def is_decodable_image(data, content_type):
+    if content_type == "image/svg+xml":
+        return False
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return True
+    return any(data.startswith(m) for m in IMAGE_MAGICS)
+
+
 def process_pdf(file_bytes):
     """Returns (extracted_text, list_of_data_urls) -- scanned/image-only pages get
     rendered to PNG and treated as images instead of yielding empty text."""
@@ -599,7 +615,10 @@ def generate_notes(course_name, assignment, existing_id=None):
         ctype = f["content_type"]
         display_lower = f["display_name"].lower()
         if ctype.startswith("image/"):
-            image_data_urls.append(f"data:{ctype};base64,{base64.b64encode(f['bytes']).decode()}")
+            if is_decodable_image(f["bytes"], ctype):
+                image_data_urls.append(f"data:{ctype};base64,{base64.b64encode(f['bytes']).decode()}")
+            else:
+                print(f"WARNING: skipping image '{f['display_name']}' ({ctype}): chat API cannot decode this format", file=sys.stderr)
         elif ctype == "application/pdf" or display_lower.endswith(".pdf"):
             text, pdf_images = process_pdf(f["bytes"])
             if text:
