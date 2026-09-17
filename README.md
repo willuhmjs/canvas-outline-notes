@@ -152,7 +152,7 @@ kubectl logs -n dav job/canvas-sync-now
 | Variable | Description |
 |----------|-------------|
 | `CANVAS_BASE_URL` | Canvas instance URL (default: `https://canvas.odu.edu`) |
-| `CHAT_API_BASE_URL` | LLM API base URL (default: `https://chat.cs.odu.edu/api/v1`) |
+| `CHAT_API_BASE_URL` | LLM API base URL (default: `https://llm.cs.odu.edu/v1`) |
 | `CHAT_MODEL_TEXT` | Model for text-only requests (default: `gpt-oss-120b`) |
 | `CHAT_MODEL_VISION` | Model for requests with images (default: `gemma-4-31b`) |
 | `OUTLINE_BASE_URL` | Outline instance URL (default: `https://outline.will.net`) |

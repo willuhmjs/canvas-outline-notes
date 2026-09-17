@@ -13,7 +13,7 @@ Deliberately generates a "study scaffold" (outline/strategy/checklist), never a
 finished or complete answer, for the third section of the assignment notes -- see
 the prompt below for why.
 
-If any of the three external services (Canvas, Outline, chat.cs.odu.edu) reports a
+If any of the three external services (Canvas, Outline, the chat API) reports a
 401/403, raises an obvious high-priority "FIX ME" task in the same Academics
 calendar canvas-sync writes to (reuses its DAV credentials) rather than just
 failing quietly in a job log nobody looks at. Auto-resolves (marked COMPLETED) the
@@ -33,7 +33,7 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
-from urllib.parse import urlencode, urljoin
+from urllib.parse import urlencode, urljoin, urlparse
 import zoneinfo
 
 import docx  # python-docx
@@ -83,7 +83,7 @@ if not CANVAS_API_TOKEN:
             CANVAS_API_TOKEN = json.load(_f).get("token", "")
     except (FileNotFoundError, json.JSONDecodeError, KeyError):
         pass
-CHAT_API_BASE_URL = os.environ.get("CHAT_API_BASE_URL", "https://chat.cs.odu.edu/api/v1").rstrip("/")
+CHAT_API_BASE_URL = os.environ.get("CHAT_API_BASE_URL", "https://llm.cs.odu.edu/v1").rstrip("/")
 CHAT_API_KEY = os.environ["CHAT_API_KEY"]
 CHAT_MODEL_TEXT = os.environ.get("CHAT_MODEL_TEXT", "gpt-oss-120b")
 CHAT_MODEL_VISION = os.environ.get("CHAT_MODEL_VISION", "gemma-4-31b")
@@ -584,7 +584,7 @@ def chat_completion(model, content):
         timeout=180,
     )
     if status in (401, 403):
-        raise AuthFailure("chat.cs.odu.edu API key", f"HTTP {status}: {resp}")
+        raise AuthFailure(f"{urlparse(CHAT_API_BASE_URL).hostname} API key", f"HTTP {status}: {resp}")
     if status != 200:
         raise RuntimeError(f"chat completion failed: {status} {resp}")
     return resp["choices"][0]["message"]["content"]
