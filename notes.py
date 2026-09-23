@@ -355,6 +355,21 @@ def process_pptx(file_bytes):
     return "\n".join(slides_out)
 
 
+# Confirmed live against Outline's editor bundle: it only renders math wrapped in
+# single dollar signs on one line ($...$) for inline, or a $$ line, the expression,
+# then a closing $$ line for a display equation. Backslash-paren/backslash-bracket
+# LaTeX delimiters and plain-parenthesized formulas are NOT recognized -- they show
+# up as literal text, which is exactly the bug this note exists to prevent.
+MATH_NOTE = (
+    "Math formatting: if the topic involves formulas or mathematical notation, write them "
+    "using Outline's math syntax so they actually render -- inline as $P^2 \\propto a^3$ "
+    "(single dollar signs, same line, no space touching them), or as a standalone display "
+    "equation like:\n\n$$\nF = ma\n$$\n\nNever wrap a formula in plain parentheses or square "
+    "brackets, and never use backslash-paren or backslash-bracket delimiters -- none of those "
+    "render in Outline, they just show up as literal text."
+)
+
+
 PROMPT_TEMPLATE = """You are helping a student understand and prepare for a course assignment. You must NOT write or solve the assignment for them.
 
 CRITICAL, but with one distinction: don't pretend a specific Canvas-provided detail exists when it doesn't -- never invent fake datasets, fake rubric criteria, fake tool names, or fake links as if Canvas gave them to you, that's actively misleading. Separately, for Topic Notes below, you SHOULD draw on your own genuine subject-matter knowledge to write real educational content -- that's not fabrication, it's real information a tutor would know. Just be upfront when you're inferring the likely topic from limited context (course name, module number) rather than an explicit prompt, e.g. "Module 8 in an intro solar-system course typically covers X -- these notes assume that; confirm against your syllabus."
@@ -369,6 +384,7 @@ Assignment instructions:
 {description}
 {attachment_text}
 {thin_content_note}
+{math_note}
 Produce exactly four markdown sections:
 
 ## Summary
