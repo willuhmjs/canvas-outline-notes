@@ -62,6 +62,28 @@ TOKEN_RENEWAL_LEAD_DAYS = int(os.environ.get("TOKEN_RENEWAL_LEAD_DAYS", 7))
 ALARM_TRIGGER = os.environ.get("ALARM_TRIGGER", "PT6H")
 CANVAS_TZ = zoneinfo.ZoneInfo(os.environ.get("CANVAS_TZ", "America/New_York"))
 
+
+def parse_inactive_courses(raw):
+    """INACTIVE_COURSES: JSON array of course names, written by the management
+    UI's per-course toggles. Missing/empty = every course is active (the
+    default). A plain comma-separated list is accepted too for hand-editing.
+    Anything unparsable fails open (treated as empty) so a bad value can never
+    silently disable every course.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return set()
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return {str(name).strip() for name in parsed if str(name).strip()}
+    except ValueError:
+        pass
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+INACTIVE_COURSES = parse_inactive_courses(os.environ.get("INACTIVE_COURSES", ""))
+
 CANVAS_ICS_URL = os.environ["CANVAS_ICS_URL"]
 CANVAS_API_TOKEN = os.environ.get("CANVAS_API_TOKEN", "")
 CANVAS_API_TOKEN_ISSUED_AT = os.environ.get("CANVAS_API_TOKEN_ISSUED_AT", "")
@@ -708,6 +730,7 @@ def main():
     all_active_courses = []
     ics_to_course = {}          # {normalized_ics_prefix: clean_course_name}
     current_course_names = set()
+    current_term_course_objs = []
     all_managed_names = set()   # all course names we've ever seen (for stale detection)
 
     if CANVAS_API_TOKEN:
@@ -717,6 +740,7 @@ def main():
             )
             ics_to_course = build_ics_to_course_map(all_active_courses)
             current = current_term_courses(all_active_courses)
+            current_term_course_objs = current
             current_course_names = {
                 clean_canvas_course_name(c["name"])
                 for c in current if c.get("name") and clean_canvas_course_name(c["name"])
@@ -728,6 +752,15 @@ def main():
         except Exception as exc:
             print(f"WARNING: Canvas API unavailable for calendar management: {exc}", file=sys.stderr)
 
+    # Courses this run actually processes: current term minus anything toggled
+    # off in the management UI (INACTIVE_COURSES). Term detection above still
+    # decides which calendars count as stale -- it just no longer gets to force
+    # a toggled-off course to be synced.
+    active_course_names = {n for n in current_course_names if n not in INACTIVE_COURSES}
+    skipped_now = sorted(current_course_names - active_course_names)
+    if skipped_now:
+        print("inactive courses skipped: " + ", ".join(skipped_now))
+
     # --- CalDAV: discover home, list existing calendars ---
     home_href = discover_calendar_home()
     calendars = list_calendars(home_href)  # {displayname: href}
@@ -736,8 +769,9 @@ def main():
     if all_managed_names:
         archive_stale_calendars(home_href, calendars, current_course_names, all_managed_names)
 
-    # Ensure every current-term course has a calendar
-    for name in sorted(current_course_names):
+    # Ensure every active course has a calendar (inactive courses keep any
+    # calendar they already have, but no new one is created for them)
+    for name in sorted(active_course_names):
         try:
             ensure_calendar(home_href, calendars, name)
         except Exception as exc:
@@ -797,9 +831,16 @@ def main():
             print(f"WARNING: could not clean Academics tasks: {exc}", file=sys.stderr)
 
     # --- Sync assignments into their per-course calendars ---
-    completion_map = build_completion_map(all_active_courses)
+    # Only ask Canvas about completion for active courses -- inactive ones are
+    # skipped below, so polling their submissions would be wasted API calls.
+    completion_map = build_completion_map(
+        [
+            c for c in current_term_course_objs
+            if clean_canvas_course_name(c.get("name") or "") not in INACTIVE_COURSES
+        ]
+    )
 
-    stats = {"created": 0, "updated": 0, "unchanged": 0, "conflict": 0, "errors": 0, "auto_completed": 0}
+    stats = {"created": 0, "updated": 0, "unchanged": 0, "conflict": 0, "errors": 0, "auto_completed": 0, "skipped_inactive": 0}
     for assignment in assignments:
         raw_summary = assignment.get("summary", "Untitled assignment")
         _, ics_code = split_summary_categories(raw_summary)
@@ -811,6 +852,9 @@ def main():
             normalized = normalize_ics_code(ics_code)
             course_name = ics_to_course.get(normalized, "")
             if course_name:
+                if course_name in INACTIVE_COURSES:
+                    stats["skipped_inactive"] += 1
+                    continue
                 course_href = calendars.get(course_name)
 
         # Fall back to Academics only for assignments we can't route
@@ -830,10 +874,10 @@ def main():
 
     print(
         f"canvas-sync: {len(assignments)} assignments | "
-        f"calendars: {len(current_course_names)} active + Academics | "
+        f"calendars: {len(active_course_names)} active + Academics | "
         f"created={stats['created']} updated={stats['updated']} "
         f"unchanged={stats['unchanged']} conflict={stats['conflict']} errors={stats['errors']} "
-        f"auto_completed={stats['auto_completed']}"
+        f"auto_completed={stats['auto_completed']} skipped_inactive={stats['skipped_inactive']}"
     )
     if stats["errors"]:
         sys.exit(1)

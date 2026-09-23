@@ -19,6 +19,9 @@ spec:
             image: ghcr.io/willuhmjs/canvas-outline-notes:latest
             command: ["python3", "/app/sync.py"]
             envFrom:
+            - configMapRef:
+                name: canvas-config
+                optional: true
             - secretRef:
                 name: canvas-sync-secrets
             - secretRef:

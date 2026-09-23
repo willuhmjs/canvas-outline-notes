@@ -38,6 +38,21 @@
 	let modelsError = $state(data.modelsError ?? null);
 	let fetchingModels = $state(false);
 
+	// Per-course active toggles (Courses section). Initialised from the loaded
+	// state and re-synced whenever the server load refreshes (e.g. after a save).
+	let courseActive = $state<Record<string, boolean>>(
+		Object.fromEntries(
+			data.courses.map((c) => [c.name, !data.inactiveCourses.includes(c.name)])
+		)
+	);
+	$effect(() => {
+		const inactive = new Set(data.inactiveCourses);
+		courseActive = Object.fromEntries(data.courses.map((c) => [c.name, !inactive.has(c.name)]));
+	});
+	const activeCourseCount = $derived(
+		data.courses.filter((c) => courseActive[c.name]).length
+	);
+
 	const _initTextModel = data.config.CHAT_MODEL_TEXT ?? 'gpt-oss-120b';
 	let textModelSelect = $state(models.includes(_initTextModel) ? _initTextModel : 'custom');
 	let textModelCustom = $state(_initTextModel);
@@ -180,6 +195,76 @@
 
 			<div class="flex justify-end pt-1">
 				<button type="submit" class="btn-primary">Save Canvas settings</button>
+			</div>
+		</form>
+	</div>
+
+	<!-- ── Courses ───────────────────────────────────────────────────── -->
+	<div class="card space-y-5">
+		<div class="flex items-center justify-between">
+			<div>
+				<h2 class="text-base font-semibold text-slate-100">Courses</h2>
+				<p class="text-xs text-slate-400 mt-0.5">
+					Which courses the scheduled sync and notes jobs process. New courses are active by default.
+				</p>
+			</div>
+			{#if data.courses.length > 0}
+				<span class="text-xs text-slate-400 flex-shrink-0 ml-4">
+					{activeCourseCount} of {data.courses.length} active
+				</span>
+			{/if}
+		</div>
+
+		<form method="POST" action="?/courses" use:enhance={keepValues} class="space-y-4">
+			{#if data.courses.length === 0}
+				<p class="text-sm text-slate-400">
+					{#if data.coursesError}
+						Could not list courses from Canvas: {data.coursesError}
+					{:else}
+						No current-term courses found — save a Canvas API token on the Token page, then reload.
+					{/if}
+				</p>
+			{:else}
+				<div class="divide-y divide-slate-700 rounded-lg border border-slate-700 px-4">
+					{#each data.courses as course (course.id)}
+						<input type="hidden" name="known" value={course.name} />
+						<label class="flex items-center justify-between gap-4 py-2.5 cursor-pointer">
+							<div class="min-w-0">
+								<p class="text-sm text-slate-200 truncate">{course.name}</p>
+								{#if course.code}
+									<p class="text-xs text-slate-500 truncate">{course.code}</p>
+								{/if}
+							</div>
+							<div class="relative flex-shrink-0">
+								<input
+									type="checkbox"
+									name="course"
+									value={course.name}
+									bind:checked={courseActive[course.name]}
+									class="peer sr-only"
+								/>
+								<div class="w-9 h-5 rounded-full bg-slate-600 peer-checked:bg-indigo-600 transition-colors"></div>
+								<div class="absolute left-0.5 top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform peer-checked:translate-x-4"></div>
+							</div>
+						</label>
+					{/each}
+				</div>
+				<p class="text-xs text-slate-500">
+					Inactive courses are skipped by both scheduled jobs — no calendar sync, no AI notes.
+					Existing tasks and notes are left untouched; toggling a course back on resumes automatically.
+				</p>
+			{/if}
+
+			{#if successMsg('courses')}
+				<p class="text-sm text-green-400">{successMsg('courses')}</p>
+			{:else if errorMsg('courses')}
+				<p class="text-sm text-red-400">{errorMsg('courses')}</p>
+			{/if}
+
+			<div class="flex justify-end pt-1">
+				<button type="submit" class="btn-primary" disabled={data.courses.length === 0}>
+					Save course selection
+				</button>
 			</div>
 		</form>
 	</div>

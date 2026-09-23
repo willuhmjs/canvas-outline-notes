@@ -114,6 +114,28 @@ ALARM_OBJECT_UID = "canvas-outline-notes-credential-alarm"
 # File-based state for incremental sync
 STATE_FILE = os.environ.get("STATE_FILE", "/state/canvas-notes-state.json")
 
+
+def parse_inactive_courses(raw):
+    """INACTIVE_COURSES: JSON array of course names, written by the management
+    UI's per-course toggles. Missing/empty = every course is active (the
+    default). A plain comma-separated list is accepted too for hand-editing.
+    Anything unparsable fails open (treated as empty) so a bad value can never
+    silently disable every course.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return set()
+    try:
+        parsed = json.loads(raw)
+        if isinstance(parsed, list):
+            return {str(name).strip() for name in parsed if str(name).strip()}
+    except ValueError:
+        pass
+    return {part.strip() for part in raw.split(",") if part.strip()}
+
+
+INACTIVE_COURSES = parse_inactive_courses(os.environ.get("INACTIVE_COURSES", ""))
+
 MAX_FILE_BYTES = 20 * 1024 * 1024
 MAX_PDF_PAGES_AS_IMAGES = 5
 MAX_ATTACHMENTS_PER_ASSIGNMENT = 10
@@ -1105,6 +1127,20 @@ def main():
         all_docs = list_all_documents(collection_id)
 
         courses = current_term_courses(canvas_get_all("/api/v1/courses", {"enrollment_state": "active", "per_page": 100}))
+
+        # Drop anything toggled off in the management UI (INACTIVE_COURSES) --
+        # everything downstream (completion map, folders, notes) keys off this
+        # list, so filtering here skips the course entirely.
+        if INACTIVE_COURSES:
+            skipped_now = sorted(
+                {clean_course_name(c.get("name") or "") for c in courses} & INACTIVE_COURSES
+            )
+            if skipped_now:
+                print("skipping inactive course(s): " + ", ".join(skipped_now))
+            courses = [
+                c for c in courses
+                if clean_course_name(c.get("name") or "") not in INACTIVE_COURSES
+            ]
 
         # Build completion map once for all courses
         completion_map = build_completion_map(courses)

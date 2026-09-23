@@ -34,6 +34,8 @@ export interface AppConfig {
 	ALARM_TRIGGER: string;
 	CURRENT_WINDOW_DAYS: string;
 	COMPLETION_LOOKBACK_DAYS: string;
+	/** Courses toggled off in the UI — JSON array of course names. Empty/missing = all active. */
+	INACTIVE_COURSES: string;
 }
 
 export interface AppState {

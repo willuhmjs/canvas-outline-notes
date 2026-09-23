@@ -581,6 +581,7 @@ const CONFIG_DEFAULTS: Record<string, string> = {
 	ALARM_TRIGGER: 'PT6H',
 	CURRENT_WINDOW_DAYS: '14',
 	COMPLETION_LOOKBACK_DAYS: '30',
+	INACTIVE_COURSES: '',
 	// Prompts: empty string here means the UI will load defaults from prompts.ts client-side
 	CHAT_PROMPT_ASSIGNMENT: '',
 	CHAT_PROMPT_PRESENTATION: '',
@@ -754,6 +755,117 @@ export async function listChatModels(
 	} catch {
 		return { error: 'Invalid response from models endpoint' };
 	}
+}
+
+// ── Canvas course discovery ───────────────────────────────────────────────────
+
+export interface CanvasCourse {
+	id: number;
+	/** Clean display name, e.g. "INTRO ASTRONOMY-SOLAR SYSTEM" — the same form sync.py/notes.py match on. */
+	name: string;
+	/** Raw Canvas prefix, e.g. "202610_ASTP103N_18192". */
+	code: string;
+}
+
+/** Parse the Link header for rel="next" — Canvas paginates list endpoints with it. */
+function parseNextLink(linkHeader: string | null): string | null {
+	if (!linkHeader) return null;
+	for (const part of linkHeader.split(',')) {
+		const section = part.split(';').map((s) => s.trim());
+		if (section.length < 2) continue;
+		if (!section.slice(1).includes('rel="next"')) continue;
+		const urlPart = section[0];
+		if (urlPart.startsWith('<') && urlPart.endsWith('>')) return urlPart.slice(1, -1);
+	}
+	return null;
+}
+
+/**
+ * List the current term's courses from the Canvas API. Mirrors the
+ * current_term_courses() heuristic in sync.py/notes.py: enrollment_state=active
+ * includes concluded past terms, so the current term is whichever
+ * enrollment_term_id belongs to the most-recently-started course. Courses the
+ * API lists but that haven't started (start_at missing) can't be term-matched
+ * and are left out, same as in the scripts.
+ */
+export async function listCanvasCourses(
+	baseUrl: string,
+	apiToken: string
+): Promise<{ courses: CanvasCourse[] } | { error: string }> {
+	if (!baseUrl || !apiToken) {
+		return { error: 'Canvas Base URL and API token are required' };
+	}
+
+	const base = baseUrl.replace(/\/+$/, '');
+	const headers = { Authorization: `Bearer ${apiToken}` };
+	const all: Array<{
+		id: number;
+		name?: string;
+		start_at?: string;
+		enrollment_term_id?: number;
+	}> = [];
+
+	let url: string | null = `${base}/api/v1/courses?enrollment_state=active&per_page=100`;
+	for (let page = 0; url && page < 10; page++) {
+		let resp: Response;
+		try {
+			resp = await fetch(url, { headers, signal: AbortSignal.timeout(8000) });
+		} catch (e) {
+			return { error: `Unreachable: ${String(e).slice(0, 120)}` };
+		}
+		if (resp.status === 401) return { error: 'Invalid API token (401)' };
+		if (!resp.ok) return { error: `HTTP ${resp.status}` };
+		let body: unknown;
+		try {
+			body = await resp.json();
+		} catch {
+			return { error: 'Invalid response from Canvas API' };
+		}
+		if (!Array.isArray(body)) return { error: 'Invalid response from Canvas API' };
+		all.push(...(body as typeof all));
+		url = parseNextLink(resp.headers.get('Link'));
+	}
+
+	// Current term = the enrollment_term_id of the most-recently-started course.
+	const dated = all
+		.filter((c) => c.start_at && c.enrollment_term_id)
+		.sort((a, b) => String(a.start_at).localeCompare(String(b.start_at)));
+	const currentTermId = dated.length ? dated[dated.length - 1].enrollment_term_id : null;
+
+	const courses: CanvasCourse[] = [];
+	for (const c of all) {
+		if (currentTermId !== null && c.enrollment_term_id !== currentTermId) continue;
+		// Canvas names look like "202610_ASTP103N_18192 INTRO ASTRONOMY-SOLAR SYSTEM"
+		const m = /^(\d+_\w+_\d+)\s+(.*)$/.exec(c.name ?? '');
+		courses.push({
+			id: c.id,
+			name: m ? m[2].trim() : (c.name ?? '').trim(),
+			code: m ? m[1] : ''
+		});
+	}
+	courses.sort((a, b) => a.name.localeCompare(b.name));
+	return { courses };
+}
+
+/** Parse the INACTIVE_COURSES config value (JSON array of course names written by the UI). */
+export function parseInactiveCourses(raw: string | undefined | null): string[] {
+	const text = (raw ?? '').trim();
+	if (!text) return [];
+	try {
+		const parsed = JSON.parse(text);
+		if (Array.isArray(parsed)) {
+			return parsed
+				.filter((n): n is string => typeof n === 'string')
+				.map((n) => n.trim())
+				.filter(Boolean);
+		}
+	} catch {
+		// fall through — tolerate a hand-edited comma-separated list
+	}
+	return text
+		.split(',')
+		.map((s) => s.trim())
+		.filter(Boolean);
 }
 
 // ── CalDAV alarm management ───────────────────────────────────────────────────

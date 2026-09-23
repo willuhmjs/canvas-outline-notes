@@ -77,6 +77,12 @@ on demand), and Logs.
 - **Docker** — reads/writes `/data/settings.json` and `/data/token.json`; both scripts read the
   token file as a fallback when `CANVAS_API_TOKEN` is not set as an environment variable
 
+**Course toggles** — the Settings page lists the current term's courses with an active toggle for
+each. Toggling a course off stops both scheduled jobs from touching it: no calendar creation or
+assignment sync, no AI notes. New courses start active by default, so each semester picks up
+automatically — the toggles are the authority on what gets processed, term detection just fills
+in the list.
+
 Shows the current token status (set/not set, character count, estimated expiry date).
 
 Login is required — the app has built-in OIDC authentication (works with Authentik, Authelia,
@@ -137,6 +143,7 @@ kubectl logs -n dav job/canvas-sync-now
 | `CANVAS_API_TOKEN` | Canvas personal access token — enables auto-completion and token renewal reminders |
 | `CANVAS_API_TOKEN_ISSUED_AT` | ISO date when the token was created (set automatically by token updater) |
 | `DAV_CALENDAR_DISPLAYNAME` | Name for the main Academics calendar (default: `Academics`) |
+| `INACTIVE_COURSES` | JSON array of course names to skip, written by the management UI's course toggles. Missing/empty = every course active |
 | `TOKEN_FILE` | Path to token JSON file for Docker mode (default: `/data/token.json`) |
 
 ### Required for notes
@@ -158,6 +165,7 @@ kubectl logs -n dav job/canvas-sync-now
 | `OUTLINE_BASE_URL` | Outline instance URL (default: `https://outline.will.net`) |
 | `OUTLINE_COLLECTION_NAME` | Collection to file notes in (default: `Automatic Notes`) |
 | `STATE_FILE` | Path to state file (default: `/data/state.json`) |
+| `INACTIVE_COURSES` | JSON array of course names to skip, written by the management UI's course toggles. Missing/empty = every course active |
 | `EXTRA_CA_CERT_FILE` | Path to a PEM file with an extra CA to trust (e.g. a self-signed intercepting proxy in front of Canvas/Outline/the LLM API). Verification stays fully enabled; this CA is trusted in addition to the system store. Leave unset for normal deployments. |
 
 ### Schedule (Docker / supercronic)

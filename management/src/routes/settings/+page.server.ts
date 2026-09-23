@@ -1,6 +1,13 @@
 import { fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
-import { getAllSettings, saveSettings, listChatModels } from '$lib/k8s';
+import {
+	getAllSettings,
+	saveSettings,
+	listChatModels,
+	listCanvasCourses,
+	parseInactiveCourses,
+	type CanvasCourse
+} from '$lib/k8s';
 
 export const load: PageServerLoad = async () => {
 	const { syncSecrets, outlineSecrets, config } = await getAllSettings();
@@ -13,7 +20,24 @@ export const load: PageServerLoad = async () => {
 		else models = result.models;
 	}
 
-	return { syncSecrets, outlineSecrets, config, models, modelsError };
+	let courses: CanvasCourse[] = [];
+	let coursesError: string | null = null;
+	if (config.CANVAS_BASE_URL && syncSecrets.CANVAS_API_TOKEN) {
+		const result = await listCanvasCourses(config.CANVAS_BASE_URL, syncSecrets.CANVAS_API_TOKEN);
+		if ('error' in result) coursesError = result.error;
+		else courses = result.courses;
+	}
+
+	return {
+		syncSecrets,
+		outlineSecrets,
+		config,
+		models,
+		modelsError,
+		courses,
+		coursesError,
+		inactiveCourses: parseInactiveCourses(config.INACTIVE_COURSES)
+	};
 };
 
 function str(fd: FormData, key: string): string {
@@ -159,6 +183,33 @@ export const actions: Actions = {
 			return { success: true, section: 'schedule' };
 		} catch (e) {
 			return fail(500, { error: String(e), section: 'schedule' });
+		}
+	},
+
+	courses: async ({ request }) => {
+		const fd = await request.formData();
+		// Each rendered course submits a `known` field plus a `course` checkbox
+		// when toggled on. Anything known but not checked is inactive.
+		const known = fd.getAll('known').map(String);
+		const active = new Set(fd.getAll('course').map(String));
+		const knownSet = new Set(known);
+
+		const { config } = await getAllSettings();
+		const stored = parseInactiveCourses(config.INACTIVE_COURSES);
+
+		// Keep entries for courses the API isn't currently listing (e.g. a
+		// course from a concluded term) so they can't silently flip back to
+		// active on the next save.
+		const inactive = new Set<string>([
+			...known.filter((name) => !active.has(name)),
+			...stored.filter((name) => !knownSet.has(name))
+		]);
+
+		try {
+			await saveSettings({}, {}, { INACTIVE_COURSES: JSON.stringify([...inactive].sort()) });
+			return { success: true, section: 'courses' };
+		} catch (e) {
+			return fail(500, { error: String(e), section: 'courses' });
 		}
 	}
 };
