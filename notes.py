@@ -392,7 +392,7 @@ MATH_NOTE = (
 )
 
 
-PROMPT_TEMPLATE = """You are helping a student understand and prepare for a course assignment. You must NOT write or solve the assignment for them.
+DEFAULT_PROMPT_TEMPLATE = """You are helping a student understand and prepare for a course assignment. You must NOT write or solve the assignment for them.
 
 CRITICAL, but with one distinction: don't pretend a specific Canvas-provided detail exists when it doesn't -- never invent fake datasets, fake rubric criteria, fake tool names, or fake links as if Canvas gave them to you, that's actively misleading. Separately, for Topic Notes below, you SHOULD draw on your own genuine subject-matter knowledge to write real educational content -- that's not fabrication, it's real information a tutor would know. Just be upfront when you're inferring the likely topic from limited context (course name, module number) rather than an explicit prompt, e.g. "Module 8 in an intro solar-system course typically covers X -- these notes assume that; confirm against your syllabus."
 
@@ -426,7 +426,7 @@ Do NOT write a finished or complete answer. Instead give ONE of these, as bullet
 """
 
 
-PRESENTATION_PROMPT_TEMPLATE = """You are helping a student review lecture material from their course.
+DEFAULT_PRESENTATION_PROMPT_TEMPLATE = """You are helping a student review lecture material from their course.
 
 Course: {course}
 Presentation/File: {name}
@@ -447,7 +447,7 @@ Detailed organized notes for later review. Structure by topic or slide section. 
 """
 
 
-TEXT_NOTES_PROMPT_TEMPLATE = """You are helping a student review course content.
+DEFAULT_TEXT_NOTES_PROMPT_TEMPLATE = """You are helping a student review course content.
 
 Course: {course}
 Title: {title}
@@ -467,6 +467,41 @@ Important terms, definitions, ideas, or takeaways. Draw on real subject-matter k
 ## Study Notes
 Detailed organised notes for later review. Focus on what's most educationally valuable. Omit boilerplate, navigation text, or anything that clearly isn't course content.
 """
+
+
+def _env_prompt(env_name, default):
+    """Custom prompt saved from the management UI's Settings page (CHAT_PROMPT_*
+    env vars, seeded from the canvas-config ConfigMap / settings.json). Empty or
+    missing means "use the built-in default"."""
+    override = os.environ.get(env_name, "").strip()
+    return override or default
+
+
+PROMPT_TEMPLATE = _env_prompt("CHAT_PROMPT_ASSIGNMENT", DEFAULT_PROMPT_TEMPLATE)
+PRESENTATION_PROMPT_TEMPLATE = _env_prompt("CHAT_PROMPT_PRESENTATION", DEFAULT_PRESENTATION_PROMPT_TEMPLATE)
+TEXT_NOTES_PROMPT_TEMPLATE = _env_prompt("CHAT_PROMPT_TEXT_NOTES", DEFAULT_TEXT_NOTES_PROMPT_TEMPLATE)
+
+
+class _SafeDict(dict):
+    """format_map helper: a placeholder the call site doesn't pass renders
+    literally instead of raising KeyError. A custom prompt with a typo'd or
+    unsupported placeholder must degrade visibly in the output, not crash the
+    whole run (that exact failure mode broke every notes job for a day)."""
+
+    def __missing__(self, key):
+        return "{" + key + "}"
+
+
+def _render_prompt(template, fallback, **kwargs):
+    """Render a prompt, falling back to the built-in default when a custom
+    template is unformattable (e.g. raw JSON braces, which the format parser
+    rejects before placeholders are even resolved)."""
+    try:
+        return template.format_map(_SafeDict(**kwargs))
+    except (ValueError, IndexError):
+        if template is not fallback:
+            print("WARNING: custom prompt failed to render; using built-in default", file=sys.stderr)
+        return fallback.format_map(_SafeDict(**kwargs))
 
 
 # Signals that a fetched URL is paywalled, login-gated, or otherwise useless.
@@ -595,7 +630,7 @@ def build_messages(course, assignment, description_text, extracted_texts, image_
         if is_thin else ""
     )
 
-    prompt = PROMPT_TEMPLATE.format(
+    prompt = _render_prompt(PROMPT_TEMPLATE, DEFAULT_PROMPT_TEMPLATE,
         course=course,
         name=assignment.get("name"),
         due=format_due(assignment.get("due_at")),
@@ -734,7 +769,7 @@ def generate_presentation_notes(course_name, file_name, file_bytes, content_type
         return None
 
     content_text = "\n\n---\n\n".join(extracted_texts) if extracted_texts else "(no text extracted)"
-    prompt = PRESENTATION_PROMPT_TEMPLATE.format(
+    prompt = _render_prompt(PRESENTATION_PROMPT_TEMPLATE, DEFAULT_PRESENTATION_PROMPT_TEMPLATE,
         course=course_name,
         name=file_name,
         content=content_text,
@@ -839,7 +874,7 @@ def fetch_binary_url(url, expected_content_type, timeout=15, max_bytes=25_000_00
 
 def generate_text_notes(course_name, title, text, source_label):
     """Generate study notes from pre-extracted text (Canvas page, YouTube transcript, URL)."""
-    prompt = TEXT_NOTES_PROMPT_TEMPLATE.format(
+    prompt = _render_prompt(TEXT_NOTES_PROMPT_TEMPLATE, DEFAULT_TEXT_NOTES_PROMPT_TEMPLATE,
         course=course_name,
         title=title,
         source_label=source_label,

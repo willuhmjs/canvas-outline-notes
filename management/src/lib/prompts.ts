@@ -20,6 +20,7 @@ Assignment instructions:
 {description}
 {attachment_text}
 {thin_content_note}
+{math_note}
 Produce exactly four markdown sections:
 
 ## Summary
