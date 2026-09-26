@@ -605,6 +605,7 @@ def build_messages(course, assignment, description_text, extracted_texts, image_
         description=description_text or "(no description provided)",
         attachment_text=attachment_text,
         thin_content_note=thin_content_note,
+        math_note=MATH_NOTE,
     )
     if image_data_urls:
         content = [{"type": "text", "text": prompt}]
