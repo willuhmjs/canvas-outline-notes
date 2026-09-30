@@ -87,6 +87,10 @@ CHAT_API_BASE_URL = os.environ.get("CHAT_API_BASE_URL", "https://llm.cs.odu.edu/
 CHAT_API_KEY = os.environ["CHAT_API_KEY"]
 CHAT_MODEL_TEXT = os.environ.get("CHAT_MODEL_TEXT", "gpt-oss-120b")
 CHAT_MODEL_VISION = os.environ.get("CHAT_MODEL_VISION", "gemma-4-31b")
+# Reasoning models spend part of max_tokens thinking before writing any output.
+# Confirmed live: glm-5.3-int4 burned all of a 4000-token budget on reasoning
+# and returned content=null for a midterm paper; it needed ~14.5k to finish.
+CHAT_MAX_TOKENS = int(os.environ.get("CHAT_MAX_TOKENS", 16000))
 OUTLINE_BASE_URL = os.environ.get("OUTLINE_BASE_URL", "https://outline.will.net").rstrip("/")
 OUTLINE_API_TOKEN = os.environ["OUTLINE_API_TOKEN"]
 OUTLINE_COLLECTION_NAME = os.environ.get("OUTLINE_COLLECTION_NAME", "Automatic Notes")
@@ -651,17 +655,33 @@ def build_messages(course, assignment, description_text, extracted_texts, image_
 
 
 def chat_completion(model, content):
-    status, resp = http_json(
-        "POST", f"{CHAT_API_BASE_URL}/chat/completions",
-        headers={"Authorization": f"Bearer {CHAT_API_KEY}"},
-        body={"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": 4000},
-        timeout=180,
-    )
-    if status in (401, 403):
-        raise AuthFailure(f"{urlparse(CHAT_API_BASE_URL).hostname} API key", f"HTTP {status}: {resp}")
-    if status != 200:
-        raise RuntimeError(f"chat completion failed: {status} {resp}")
-    return resp["choices"][0]["message"]["content"]
+    """Returns the model's text. If the whole budget went to reasoning and no
+    content came back, retries once with double the budget before giving up
+    with a clear error (instead of handing None to the caller)."""
+    max_tokens = CHAT_MAX_TOKENS
+    for attempt in range(2):
+        status, resp = http_json(
+            "POST", f"{CHAT_API_BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {CHAT_API_KEY}"},
+            body={"model": model, "messages": [{"role": "user", "content": content}], "max_tokens": max_tokens},
+            timeout=600,
+        )
+        if status in (401, 403):
+            raise AuthFailure(f"{urlparse(CHAT_API_BASE_URL).hostname} API key", f"HTTP {status}: {resp}")
+        if status != 200:
+            raise RuntimeError(f"chat completion failed: {status} {resp}")
+        choice = resp["choices"][0]
+        text = (choice.get("message") or {}).get("content")
+        finish_reason = choice.get("finish_reason")
+        if text and text.strip():
+            if finish_reason == "length":
+                print(f"WARNING: {model} hit max_tokens={max_tokens}; notes may be cut off", file=sys.stderr)
+            return text
+        if finish_reason == "length" and attempt == 0:
+            print(f"WARNING: {model} used all {max_tokens} tokens without output; retrying with {max_tokens * 2}", file=sys.stderr)
+            max_tokens *= 2
+            continue
+        raise RuntimeError(f"{model} returned no content (finish_reason={finish_reason}, max_tokens={max_tokens})")
 
 
 def generate_notes(course_name, assignment, existing_id=None):

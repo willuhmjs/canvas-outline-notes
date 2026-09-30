@@ -94,16 +94,18 @@ def test_second_run_is_idempotent(world, run):
     assert not [r for r in world.requests if r[0] in ("PUT", "DELETE", "MKCALENDAR")]
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "known bug: an unroutable assignment falls back to Academics as "
-    "canvas-event-assignment-*, which the leftover cleanup deletes on the next "
-    "run, so it is recreated every run and loses any hand completion"
-))
 def test_unroutable_assignment_is_stable_in_academics(world, run):
+    # It falls back to Academics as canvas-event-assignment-*, the same prefix
+    # the leftover cleanup targets -- it must not be deleted and recreated
     run()
+    slug = next(s for s, c in world.calendars.items() if c["displayname"] == "Academics")
+    _etag, text = world.calendars[slug]["objects"]["canvas-event-assignment-4.ics"]
+    world.put_object(slug, "canvas-event-assignment-4.ics", text.replace("STATUS:NEEDS-ACTION", "STATUS:COMPLETED"))
     out = run()
     assert "removed" not in out
-    assert "created=0" in out
+    assert "created=0 updated=0 unchanged=4" in out
+    _etag, text = world.calendars[slug]["objects"]["canvas-event-assignment-4.ics"]
+    assert "STATUS:COMPLETED" in text
 
 
 def test_inactive_course_calendar_is_deleted(world, run):

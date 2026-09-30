@@ -163,6 +163,7 @@ kubectl logs -n dav job/canvas-sync-now
 | `CHAT_API_BASE_URL` | LLM API base URL (default: `https://llm.cs.odu.edu/v1`) |
 | `CHAT_MODEL_TEXT` | Model for text-only requests (default: `gpt-oss-120b`) |
 | `CHAT_MODEL_VISION` | Model for requests with images (default: `gemma-4-31b`) |
+| `CHAT_MAX_TOKENS` | Completion budget per request, reasoning included (default: `16000`). Doubled once automatically if a reply is all reasoning and no content |
 | `OUTLINE_BASE_URL` | Outline instance URL (default: `https://outline.will.net`) |
 | `OUTLINE_COLLECTION_NAME` | Collection to file notes in (default: `Automatic Notes`) |
 | `STATE_FILE` | Path to state file (default: `/data/state.json`) |

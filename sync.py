@@ -789,8 +789,19 @@ def main():
     # Now that each course has its own calendar, any canvas-event-assignment-*
     # tasks still on Academics are pre-migration leftovers. Identify them by UID
     # prefix and delete. The token renewal reminder (canvas-token-renewal-reminder)
-    # and any manually created tasks stay untouched.
+    # and any manually created tasks stay untouched, as do tasks this run is
+    # about to (re)write to Academics itself because their course can't be
+    # routed -- deleting those would recreate them every run and drop any
+    # completion set by hand.
     if academics_href and current_course_names:
+        academics_bound = set()
+        for assignment in assignments:
+            _, ics_code = split_summary_categories(assignment.get("summary", ""))
+            course_name = ics_to_course.get(normalize_ics_code(ics_code), "") if ics_code else ""
+            if course_name in INACTIVE_COURSES:
+                continue
+            if not (course_name and calendars.get(course_name)):
+                academics_bound.add(canvas_uid_to_object_uid(assignment["uid"]))
         rb = (
             '<?xml version="1.0" encoding="utf-8"?>'
             '<c:calendar-query xmlns:d="DAV:" xmlns:c="urn:ietf:params:xml:ns:caldav">'
@@ -819,7 +830,8 @@ def main():
                 uid_match = re.search(r"\nUID:(.+)", (data_el.text or ""))
                 if not uid_match:
                     continue
-                if not uid_match.group(1).strip().startswith("canvas-event-assignment-"):
+                uid = uid_match.group(1).strip()
+                if not uid.startswith("canvas-event-assignment-") or uid in academics_bound:
                     continue
                 obj_url = urljoin(DAV_BASE_URL + "/", href_el.text)
                 s, _, _ = dav_request("DELETE", obj_url)

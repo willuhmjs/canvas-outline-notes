@@ -63,3 +63,51 @@ def test_assignment_bucket(monkeypatch):
     assert notes.assignment_bucket(iso_in(-2)) == notes.BUCKET_PAST
     assert notes.assignment_bucket(iso_in(3)) == notes.BUCKET_CURRENT
     assert notes.assignment_bucket(iso_in(30)) == notes.BUCKET_FUTURE
+
+
+class TestChatCompletion:
+    def fake_api(self, monkeypatch, replies):
+        calls = []
+
+        def fake_http_json(method, url, headers=None, body=None, timeout=60):
+            calls.append(body["max_tokens"])
+            return replies.pop(0)
+
+        monkeypatch.setattr(notes, "http_json", fake_http_json)
+        monkeypatch.setattr(notes, "CHAT_MAX_TOKENS", 1000)
+        return calls
+
+    @staticmethod
+    def reply(content, finish_reason="stop"):
+        return 200, {"choices": [{"message": {"content": content}, "finish_reason": finish_reason}]}
+
+    def test_returns_content(self, monkeypatch):
+        calls = self.fake_api(monkeypatch, [self.reply("notes")])
+        assert notes.chat_completion("m", "prompt") == "notes"
+        assert calls == [1000]
+
+    def test_all_reasoning_retries_with_double_budget(self, monkeypatch):
+        calls = self.fake_api(monkeypatch, [self.reply(None, "length"), self.reply("notes")])
+        assert notes.chat_completion("m", "prompt") == "notes"
+        assert calls == [1000, 2000]
+
+    def test_gives_up_with_clear_error_after_one_retry(self, monkeypatch):
+        calls = self.fake_api(monkeypatch, [self.reply(None, "length"), self.reply(None, "length")])
+        with pytest.raises(RuntimeError, match="returned no content"):
+            notes.chat_completion("m", "prompt")
+        assert calls == [1000, 2000]
+
+    def test_empty_content_without_length_does_not_retry(self, monkeypatch):
+        calls = self.fake_api(monkeypatch, [self.reply("  ", "stop")])
+        with pytest.raises(RuntimeError, match="finish_reason=stop"):
+            notes.chat_completion("m", "prompt")
+        assert calls == [1000]
+
+    def test_truncated_content_is_kept(self, monkeypatch):
+        self.fake_api(monkeypatch, [self.reply("partial", "length")])
+        assert notes.chat_completion("m", "prompt") == "partial"
+
+    def test_auth_failure(self, monkeypatch):
+        self.fake_api(monkeypatch, [(401, {"error": "bad key"})])
+        with pytest.raises(notes.AuthFailure):
+            notes.chat_completion("m", "prompt")
