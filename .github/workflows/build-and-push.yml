@@ -9,7 +9,21 @@ on:
   workflow_dispatch:
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: python:3.12-slim
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: pip install --root-user-action=ignore -r requirements.txt -r requirements-dev.txt
+
+      - name: Run tests
+        run: python -m pytest -p no:cacheprovider tests
+
   build-scripts:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -53,6 +67,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=scripts
 
   build-management:
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read

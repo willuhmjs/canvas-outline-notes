@@ -210,6 +210,19 @@ The two scripts are fully independent. A `sync.py` crash does not affect `notes.
 
 ---
 
+## Tests
+
+```bash
+./run-tests.sh            # whole suite, inside python:3.12-slim (needs Docker)
+./run-tests.sh -k inactive
+```
+
+`tests/test_sync_main.py` runs `sync.main()` end to end against an in-process fake Davis +
+Canvas (`tests/fakes.py`) over real HTTP; the other files unit-test the pure helpers. CI runs the
+same suite and only builds the images if it passes.
+
+---
+
 ## Requirements
 
 - Python 3.12+
