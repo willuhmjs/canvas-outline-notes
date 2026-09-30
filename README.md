@@ -13,7 +13,7 @@ Two independent scripts run on a cron schedule:
 
 ### Calendar sync (`sync.py`)
 
-**Per-course calendars** — Each course gets its own CalDAV calendar created automatically. Courses from the current semester are active; when a semester ends, stale course calendars are archived (deleted) automatically.
+**Per-course calendars** — Each course gets its own CalDAV calendar created automatically. Courses from the current semester are active; when a semester ends, or a course is toggled off in the management UI, its calendar is archived (deleted) automatically.
 
 **Assignment tasks** — Every Canvas assignment appears as a VTODO with:
 - Due date
@@ -78,8 +78,9 @@ on demand), and Logs.
   token file as a fallback when `CANVAS_API_TOKEN` is not set as an environment variable
 
 **Course toggles** — the Settings page lists the current term's courses with an active toggle for
-each. Toggling a course off stops both scheduled jobs from touching it: no calendar creation or
-assignment sync, no AI notes. New courses start active by default, so each semester picks up
+each. Toggling a course off deletes its calendar on the next sync run and stops the notes job
+from touching it (existing Outline notes are kept). Toggling it back on recreates the calendar and
+refills it from Canvas; auto-detected completions come back, hand-checked tasks do not. New courses start active by default, so each semester picks up
 automatically — the toggles are the authority on what gets processed, term detection just fills
 in the list.
 

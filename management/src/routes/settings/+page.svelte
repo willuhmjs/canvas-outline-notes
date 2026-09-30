@@ -250,8 +250,8 @@
 					{/each}
 				</div>
 				<p class="text-xs text-slate-500">
-					Inactive courses are skipped by both scheduled jobs — no calendar sync, no AI notes.
-					Existing tasks and notes are left untouched; toggling a course back on resumes automatically.
+					Inactive courses have their calendar removed and get no new AI notes (existing notes stay).
+					Toggling a course back on recreates its calendar from Canvas.
 				</p>
 			{/if}
 

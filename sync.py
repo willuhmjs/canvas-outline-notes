@@ -218,7 +218,8 @@ def ensure_calendar(home_href, calendars, displayname):
 
 
 def archive_stale_calendars(home_href, calendars, current_names, all_managed_names):
-    """Delete calendars for courses that are no longer in the current term.
+    """Delete calendars for courses that are no longer active -- either the
+    semester ended or the course was toggled off in the management UI.
 
     Only touches calendars whose displayname appears in all_managed_names (i.e. it
     was created by this script for a Canvas course). Never touches DAV_CALENDAR_DISPLAYNAME
@@ -233,7 +234,7 @@ def archive_stale_calendars(home_href, calendars, current_names, all_managed_nam
         href = calendars[name]
         status, _, content = dav_request("DELETE", href)
         if status in (200, 204):
-            print(f"archived calendar '{name}' (semester ended)")
+            print(f"archived calendar '{name}' (no longer active)")
             del calendars[name]
         else:
             print(f"WARNING: could not archive '{name}': {status} {content[:100]!r}", file=sys.stderr)
@@ -753,9 +754,9 @@ def main():
             print(f"WARNING: Canvas API unavailable for calendar management: {exc}", file=sys.stderr)
 
     # Courses this run actually processes: current term minus anything toggled
-    # off in the management UI (INACTIVE_COURSES). Term detection above still
-    # decides which calendars count as stale -- it just no longer gets to force
-    # a toggled-off course to be synced.
+    # off in the management UI (INACTIVE_COURSES). Anything outside this set
+    # has its calendar deleted below; toggling a course back on recreates it and
+    # the assignment loop refills it from the feed.
     active_course_names = {n for n in current_course_names if n not in INACTIVE_COURSES}
     skipped_now = sorted(current_course_names - active_course_names)
     if skipped_now:
@@ -767,10 +768,9 @@ def main():
 
     # --- Lifecycle: archive stale course calendars, create missing ones ---
     if all_managed_names:
-        archive_stale_calendars(home_href, calendars, current_course_names, all_managed_names)
+        archive_stale_calendars(home_href, calendars, active_course_names, all_managed_names)
 
-    # Ensure every active course has a calendar (inactive courses keep any
-    # calendar they already have, but no new one is created for them)
+    # Ensure every active course has a calendar
     for name in sorted(active_course_names):
         try:
             ensure_calendar(home_href, calendars, name)
