@@ -18,7 +18,10 @@ const { handle: authHandle } = SvelteKitAuth({
 			type: 'oidc',
 			issuer: env.AUTH_OIDC_ISSUER,
 			clientId: env.AUTH_OIDC_ID,
-			clientSecret: env.AUTH_OIDC_SECRET
+			clientSecret: env.AUTH_OIDC_SECRET,
+			// Auth.js's default for OIDC is PKCE only. Authelia rejects authorization requests that
+			// carry no `state` (invalid_state), so send both.
+			checks: ['pkce', 'state']
 		}
 	],
 	callbacks: {
