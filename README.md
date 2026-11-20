@@ -229,3 +229,11 @@ same suite and only builds the images if it passes.
 - Python 3.12+
 - A CalDAV server ([Davis](https://github.com/tchapi/davis) recommended, any standard server works)
 - For notes: Canvas API token, Outline instance, OpenAI-compatible LLM API
+
+## Writing to a folder instead of Outline
+
+Set `NOTES_OUTPUT_DIR` (e.g. a mounted SMB share) and `notes.py` writes markdown files
+there instead of calling Outline; `OUTLINE_API_TOKEN` is then not required. The layout
+mirrors the Outline tree: `<dir>/<Class>/Assignments/<Current|Future|Past>/<Assignment>.md`
+and `<dir>/<Class>/Notes/<File>.md`. Ids and icons are tracked in `<dir>/.index.json`
+(do not delete it; files removed by hand are simply regenerated).

@@ -92,7 +92,10 @@ CHAT_MODEL_VISION = os.environ.get("CHAT_MODEL_VISION", "gemma-4-31b")
 # and returned content=null for a midterm paper; it needed ~14.5k to finish.
 CHAT_MAX_TOKENS = int(os.environ.get("CHAT_MAX_TOKENS", 16000))
 OUTLINE_BASE_URL = os.environ.get("OUTLINE_BASE_URL", "https://outline.will.net").rstrip("/")
-OUTLINE_API_TOKEN = os.environ["OUTLINE_API_TOKEN"]
+# When NOTES_OUTPUT_DIR is set, documents are written as markdown files under that
+# directory (e.g. a mounted SMB share) and Outline is not contacted at all.
+NOTES_OUTPUT_DIR = os.environ.get("NOTES_OUTPUT_DIR", "").strip()
+OUTLINE_API_TOKEN = os.environ.get("OUTLINE_API_TOKEN", "") if NOTES_OUTPUT_DIR else os.environ["OUTLINE_API_TOKEN"]
 OUTLINE_COLLECTION_NAME = os.environ.get("OUTLINE_COLLECTION_NAME", "Automatic Notes")
 
 ASSIGNMENTS_FOLDER = "Assignments"
@@ -936,6 +939,128 @@ def build_completion_map(courses):
     return completion
 
 
+# ---- Filesystem backend ----------------------------------------------------
+# Emulates the handful of Outline API actions this script uses on a directory tree,
+# so the rest of the logic (folders, buckets, hash-based regen, moves) is unchanged.
+# A document whose text is just "# <title>\n" is a section folder -> a directory;
+# anything else is "<title>.md" inside its parent's directory. Stable ids and icons
+# live in <root>/.index.json (id -> {path, title, icon, folder}) so moves keep their id.
+
+_FS_INDEX_NAME = ".index.json"
+_FS_FORBIDDEN = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def _fs_root():
+    os.makedirs(NOTES_OUTPUT_DIR, exist_ok=True)
+    return NOTES_OUTPUT_DIR
+
+
+def _fs_safe(title):
+    name = _FS_FORBIDDEN.sub("-", title).strip().strip(".") or "untitled"
+    return name[:150]
+
+
+def _fs_load():
+    try:
+        with open(os.path.join(_fs_root(), _FS_INDEX_NAME)) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _fs_save(index):
+    path = os.path.join(_fs_root(), _FS_INDEX_NAME)
+    with open(path + ".tmp", "w") as f:
+        json.dump(index, f, indent=1)
+    os.replace(path + ".tmp", path)
+
+
+def _fs_dir_of(index, parent_id):
+    """Directory (relative to root) that holds children of parent_id."""
+    return index[parent_id]["path"] if parent_id else ""
+
+
+def _fs_parent_of(index, entry):
+    parent_path = os.path.dirname(entry["path"])
+    for i, e in index.items():
+        if e["folder"] and e["path"] == parent_path:
+            return i
+    return None
+
+
+def _fs_view(index, doc_id):
+    e = index[doc_id]
+    return {"id": doc_id, "title": e["title"], "icon": e.get("icon", ""),
+            "parentDocumentId": _fs_parent_of(index, e)}
+
+
+def _fs_post(action, body):
+    root = _fs_root()
+    index = _fs_load()
+    # Drop entries whose file/dir was deleted by hand so they get regenerated.
+    index = {i: e for i, e in index.items() if os.path.exists(os.path.join(root, e["path"]))}
+
+    if action == "collections.list":
+        return [{"id": "root", "name": OUTLINE_COLLECTION_NAME}]
+    if action == "collections.create":
+        return {"id": "root"}
+    if action == "documents.list":
+        docs = [_fs_view(index, i) for i in sorted(index)]
+        off = body.get("offset", 0)
+        return docs[off:off + body.get("limit", 100)]
+    if action == "documents.info":
+        e = index[body["id"]]
+        text = ""
+        if not e["folder"]:
+            with open(os.path.join(root, e["path"]), encoding="utf-8") as f:
+                text = f.read()
+        return {**_fs_view(index, body["id"]), "text": text}
+    if action == "documents.create":
+        import uuid
+        title, text = body["title"], body.get("text", "")
+        folder = text == f"# {title}\n"
+        rel_dir = _fs_dir_of(index, body.get("parentDocumentId"))
+        base = _fs_safe(title)
+        rel = os.path.join(rel_dir, base if folder else base + ".md")
+        if os.path.exists(os.path.join(root, rel)):
+            raise RuntimeError(f"{rel} already exists")
+        if folder:
+            os.makedirs(os.path.join(root, rel))
+        else:
+            os.makedirs(os.path.join(root, rel_dir), exist_ok=True)
+            with open(os.path.join(root, rel), "w", encoding="utf-8") as f:
+                f.write(text)
+        doc_id = str(uuid.uuid4())
+        index[doc_id] = {"path": rel, "title": title, "icon": body.get("icon", ""), "folder": folder}
+        _fs_save(index)
+        return {"id": doc_id}
+    if action == "documents.update":
+        e = index[body["id"]]
+        if "text" in body and not e["folder"]:
+            full = os.path.join(root, e["path"])
+            with open(full + ".tmp", "w", encoding="utf-8") as f:
+                f.write(body["text"])
+            os.replace(full + ".tmp", full)
+        if "icon" in body:
+            e["icon"] = body["icon"]
+        _fs_save(index)
+        return {"id": body["id"]}
+    if action == "documents.move":
+        e = index[body["id"]]
+        new_rel = os.path.join(_fs_dir_of(index, body.get("parentDocumentId")), os.path.basename(e["path"]))
+        if new_rel != e["path"]:
+            os.makedirs(os.path.dirname(os.path.join(root, new_rel)) or root, exist_ok=True)
+            os.replace(os.path.join(root, e["path"]), os.path.join(root, new_rel))
+            old = e["path"]
+            for other in index.values():
+                if other["path"].startswith(old + os.sep):
+                    other["path"] = new_rel + other["path"][len(old):]
+            e["path"] = new_rel
+            _fs_save(index)
+        return {"id": body["id"]}
+    raise RuntimeError(f"filesystem backend: unsupported action {action}")
+
+
 def outline_post(action, body, max_retries=4):
     """Confirmed live: Outline's self-hosted rate limit is real and gets hit within
     a single run once you're doing collections.list + documents.list per course +
@@ -943,6 +1068,8 @@ def outline_post(action, body, max_retries=4):
     one 429 crash the whole job (it used to -- caught by an actual run creating 10
     real documents before dying on the 11th call).
     """
+    if NOTES_OUTPUT_DIR:
+        return _fs_post(action, body)
     for attempt in range(max_retries + 1):
         status, resp = http_json(
             "POST", f"{OUTLINE_BASE_URL}/api/{action}",
